@@ -162,7 +162,7 @@
             { v: 'vm', l: 'Use VM management network', d: 'VCF Operations, VCF Automation and VCF management services are deployed on the VM management network.' },
             { v: 'separate', l: 'Use a separate dedicated network', d: 'A dedicated FLEET_MANAGEMENT network (VLAN/subnet) for VCF Operations, VCF Automation and the VCF management services.' },
           ], help: 'Network used by the VCF management components (fleet-level services).', api: 'networkSpecs[].networkType = FLEET_MANAGEMENT' },
-          { id: 'vpcType', label: 'VPC network configuration', type: 'select', options: C.vpcType, def: 'full', rerender: true, help: 'NSX VPC model for the management domain.', api: 'nsxtSpec.vpcSpec.vpcNetworkConfigurationType' },
+          { id: 'vpcType', label: 'VPC network configuration', type: 'select', options: C.vpcType, def: 'full', rerender: true, help: 'NSX VPC model for the management domain. This also decides whether the management hosts get NSX TEPs, even if you never create VPCs: Full Stack VPC configures host TEPs (host overlay VLAN and IP pool needed, and AZ2 TEPs when stretching); VLAN backed VPC configures no TEPs. If the management domain will only use VLAN-backed segments, VLAN backed VPC avoids the TEP network.', api: 'nsxtSpec.vpcSpec.vpcNetworkConfigurationType' },
           { id: 'vpcConn', label: 'VPC gateway connectivity', type: 'select', options: C.vpcConnectivity, def: 'centralized', rerender: true, show: fullStack, help: 'How VPCs reach the physical network.', api: 'nsxtSpec.vpcSpec.dtgwSpec' },
         ],
       },
