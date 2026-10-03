@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VCF 9 JSON Generator</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <h1>VCF 9 JSON Generator</h1>
+    <span class="sub">Planning &amp; Preparation workbook 9.1.1 as a web form</span>
+  </div>
+  <nav id="tabs" class="tabs" aria-label="Workflows"></nav>
+  <div class="actions">
+    <button type="button" id="btn-open" class="btn">Open / validate JSON</button>
+    <button type="button" id="btn-save-project" class="btn" title="Save all forms (including choices that are not part of the JSON) to a project file">Save project</button>
+    <button type="button" id="btn-sample" class="btn ghost" title="Fill the current form with the workbook sample values">Load sample</button>
+    <button type="button" id="btn-reset" class="btn ghost">Reset form</button>
+  </div>
+</header>
+
+<div class="layout">
+  <nav id="sections" class="sections" aria-label="Sections"></nav>
+  <main id="form" class="form"></main>
+  <aside class="side">
+    <div class="side-head">
+      <div class="side-tabs">
+        <button type="button" data-tab="help" class="active">Help</button>
+        <button type="button" data-tab="issues">Issues <span id="issue-count" class="badge"></span></button>
+        <button type="button" data-tab="json">JSON</button>
+      </div>
+      <div id="status" class="status"></div>
+    </div>
+    <div id="pane-help" class="side-pane active"><div id="help"></div></div>
+    <div id="pane-issues" class="side-pane"><div id="issues"></div></div>
+    <div id="pane-json" class="side-pane">
+      <div class="json-tools">
+        <select id="file-select" aria-label="Output file"></select>
+        <div class="btnrow">
+          <button type="button" id="btn-validate" class="btn small">Validate</button>
+          <button type="button" id="btn-copy" class="btn small">Copy</button>
+          <button type="button" id="btn-dl" class="btn small primary">Download</button>
+          <button type="button" id="btn-dl-redacted" class="btn small" title="Download with all password fields removed">Download without passwords</button>
+          <button type="button" id="btn-dl-all" class="btn small">Download all files</button>
+        </div>
+        <div id="file-info" class="file-info"></div>
+      </div>
+      <pre id="json-out" class="json"></pre>
+    </div>
+  </aside>
+</div>
+
+<dialog id="open-dialog" class="dialog">
+  <form method="dialog" class="dialog-body">
+    <h3>Open or validate a JSON file</h3>
+    <p class="muted">Supported: VCF Installer spec (management domain), SDDC Manager workload domain spec, cluster stretch spec, or a project file saved from this tool. Files never leave your browser.</p>
+    <input type="file" id="open-file" accept=".json,application/json">
+    <textarea id="open-text" rows="14" placeholder="...or paste JSON here" spellcheck="false"></textarea>
+    <div id="open-result"></div>
+    <div class="btnrow end">
+      <button type="button" id="open-validate" class="btn">Validate only</button>
+      <button type="button" id="open-load" class="btn primary">Load into form</button>
+      <button value="cancel" class="btn ghost">Close</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="js/schema.js"></script>
+<script src="js/net.js"></script>
+<script src="js/engine.js"></script>
+<script src="js/forms/common.js"></script>
+<script src="js/forms/mgmt.js"></script>
+<script src="js/forms/wld.js"></script>
+<script src="js/forms/stretch.js"></script>
+<script>App.init();</script>
+</body>
+</html>
