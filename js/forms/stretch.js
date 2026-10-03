@@ -203,10 +203,10 @@
           { id: 'clusterId', label: 'SDDC Manager cluster ID', type: 'text', help: 'UUID of the cluster from <code>GET /v1/clusters</code>. Used in the API path <code>PATCH /v1/clusters/{id}</code>. Not part of the JSON body.', lookup: clusterLookup },
           { id: 'vsanType', label: 'vSAN architecture', type: 'select', def: 'vsan-esa', options: C.storage.slice(0, 2), help: 'Architecture of the existing cluster. Determines the commissioning storage type. Filled by the cluster ID lookup.' },
           { id: 'nsxNet', label: 'NSX networking of the cluster', type: 'select', def: 'overlay', rerender: true, options: [
-            { v: 'overlay', l: 'NSX overlay (host TEPs)', d: 'Typical for workload domain clusters. AZ2 hosts need TEPs: an AZ2 host overlay VLAN and IP pool (section 3), and the Edge cluster must be prepared for multi-AZ.' },
-            { v: 'vlan', l: 'VLAN-backed only (no host TEPs)', d: 'Typical for the management domain in VCF 9 (VLAN-backed segments / VLAN-backed VPC). No AZ2 overlay configuration and no Edge multi-AZ acknowledgement are sent.' },
-          ], help: 'Whether the cluster hosts carry NSX overlay (TEP) traffic. Filled by the cluster ID lookup (overlay transport zone present or not).' },
-          { id: 'edgeMultiAz', label: 'Edge cluster is configured for multi-AZ', type: 'checkbox', def: true, show: overlay, help: 'Only relevant with NSX overlay and an Edge cluster. Acknowledge that the Edge cluster networking (uplink VLANs, BGP to AZ2 top-of-rack, route maps) is prepared to work after a site failover.', api: 'clusterStretchSpec.isEdgeClusterConfiguredForMultiAZ' },
+            { v: 'overlay', l: 'Hosts have TEPs (NSX overlay)', d: 'Default. All VCF 9.0 / 9.1.0 management domains and every Full Stack VPC deployment have host TEPs, even if only VLAN-backed segments are used. AZ2 hosts then need TEPs too (section 3).' },
+            { v: 'vlan', l: 'Hosts have no TEPs', d: 'Only for clusters deployed without host TEPs: VCF 9.1.1 with VLAN backed VPC (overlayVtepSpec NO_IP). No AZ2 overlay configuration is sent.' },
+          ], help: 'Whether the existing hosts of the cluster have NSX TEPs (an overlay transport zone on the host switch). This is about the hosts, not whether you use overlay or VLAN segments. The cluster ID lookup detects it.' },
+          { id: 'edgeMultiAz', label: 'Edge cluster is configured for multi-AZ', type: 'checkbox', def: false, help: 'Only relevant if this domain has an NSX Edge cluster. Tick to acknowledge that the Edge cluster networking (uplink VLANs, BGP to AZ2 top-of-rack, route maps) works after a site failover. Leave cleared if the domain has no Edge cluster (common for the management domain).', api: 'clusterStretchSpec.isEdgeClusterConfiguredForMultiAZ' },
           { id: 'noLicense', label: 'Deploy without license keys', type: 'checkbox', def: true, help: 'VCF 9 licenses through VCF Operations.', api: 'clusterStretchSpec.deployWithoutLicenseKeys' },
         ],
       },
@@ -275,6 +275,7 @@
     const out = [];
     const hosts = s.hosts.filter(h => (h.fqdn || '').trim());
     const missing = hosts.filter(h => !(h.id || '').trim()).length;
+    if (s.nsxNet === 'vlan') out.push({ level: 'warn', field: 'nsxNet', msg: '"Hosts have no TEPs" is only valid for clusters deployed without TEPs (VCF 9.1.1 VLAN backed VPC). Confirm with the cluster ID lookup (overlay=false).' });
     if (missing) out.push({ level: 'warn', field: 'hosts', msg: missing + ' AZ2 host(s) without SDDC Manager host ID; placeholders are written to the JSON' });
     if (!(s.clusterId || '').trim()) out.push({ level: 'info', field: 'clusterId', msg: 'Cluster ID is empty; replace {id} in PATCH /v1/clusters/{id} when submitting' });
     const n = hosts.length;
@@ -331,9 +332,9 @@
       hostSpecs: hostRows.map(h => ({ id: (h.id || '').trim() || HOST_ID_PH, hostName: h.fqdn.trim(), hostNetworkSpec })),
       witnessSpec: { fqdn: g('witnessFqdn'), vsanIp: g('witnessIp'), vsanCidr: g('witnessCidr') },
       witnessTrafficSharedWithVsanTraffic: !!s.witnessShared,
+      isEdgeClusterConfiguredForMultiAZ: !!s.edgeMultiAz,
       deployWithoutLicenseKeys: !!s.noLicense,
     };
-    if (overlay(s)) spec.isEdgeClusterConfiguredForMultiAZ = !!s.edgeMultiAz;
     if (pool(s)) {
       const nsxVds = g('nsxVds');
       const up = vmNics.filter(x => x.vdsName === nsxVds).map(x => x.uplink);
@@ -375,8 +376,8 @@
     const w = sp.witnessSpec || {};
     s.witnessFqdn = str(w.fqdn); s.witnessIp = str(w.vsanIp); s.witnessCidr = str(w.vsanCidr);
     s.witnessShared = !!sp.witnessTrafficSharedWithVsanTraffic;
-    s.edgeMultiAz = sp.isEdgeClusterConfiguredForMultiAZ !== false;
-    s.nsxNet = sp.networkSpec || sp.secondaryAzOverlayVlanId !== undefined || sp.isEdgeClusterConfiguredForMultiAZ !== undefined ? 'overlay' : 'vlan';
+    s.edgeMultiAz = sp.isEdgeClusterConfiguredForMultiAZ === true;
+    s.nsxNet = sp.networkSpec || sp.secondaryAzOverlayVlanId !== undefined ? 'overlay' : 'vlan';
     s.noLicense = sp.deployWithoutLicenseKeys !== false;
     const hs = sp.hostSpecs || [];
     s.hosts = hs.map(h => ({ fqdn: str(h.hostName || h.hostname), id: str(h.id).indexOf('<--') === 0 ? '' : str(h.id) }));
@@ -418,7 +419,7 @@
     const hosts = [];
     for (let i = 1; i <= 4; i++) hosts.push({ fqdn: 'sfo02-m01-r01-esx0' + i + '.sfo.rainpole.io', id: '' });
     return {
-      clusterName: 'sfo-m01-cl01', vsanType: 'vsan-esa', edgeMultiAz: true,
+      clusterName: 'sfo-m01-cl01', vsanType: 'vsan-esa', edgeMultiAz: false,
       witnessFqdn: 'sfo-m01-cl01-vsw01.sfo.rainpole.io', witnessIp: '10.17.10.218', witnessCidr: '10.17.10.0/24',
       poolName: 'sfo02-m01-r01-network-pool-01',
       vmotionVlan: '1212', vmotionMtu: '9000', vmotionGw: '10.12.12.1/24', vmotionStart: '10.12.12.101', vmotionEnd: '10.12.12.116',
