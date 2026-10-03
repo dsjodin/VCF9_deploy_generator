@@ -7,19 +7,25 @@
   const IMAGE_PH = '<--ENTER-CLUSTER-IMAGE-ID-->';
   const API = 'computeSpec.clusterSpecs[].networkSpec.vdsSpecs[]';
 
-  const isVsan = s => s.storage === 'vsan-esa' || s.storage === 'vsan-osa';
+  const full = s => s.deployType !== 'infra';
+  const isVsan = s => ['vsan-esa', 'vsan-osa', 'vsan-max'].includes(s.storage);
+  const isEsa = s => s.storage === 'vsan-esa' || s.storage === 'vsan-max';
+  const nfsNet = s => s.storage === 'nfs' || (s.secondary === 'nfs' && s.storage !== 'nfs');
+  const clientNet = s => s.storage === 'vsan-max' && s.secondary === 'client';
+  const createPool = s => full(s) && s.poolMode !== 'reuse';
+  const STATE = [{ v: 'Active', l: 'Active' }, { v: 'Standby', l: 'Standby' }, { v: 'Unused', l: 'Unused' }];
   const fullStack = s => s.vpcType === 'full';
   const distributed = s => fullStack(s) && s.vpcConn === 'distributed';
   const nsxHA = s => s.nsxModel === 'ha';
   const custom = s => s.vdsProfile === 'custom';
   const sup = s => !!s.supervisor;
-  const storageNet = s => isVsan(s) || s.storage === 'nfs';
 
   const TRAFFIC = [
     { k: 'mgmt', type: 'MANAGEMENT', label: 'ESX management', pg: 'esx-mgmt', show: () => true },
     { k: 'vmotion', type: 'VMOTION', label: 'vMotion', pg: 'vmotion', show: () => true },
     { k: 'vsan', type: 'VSAN', label: 'vSAN', pg: 'vsan', show: isVsan },
-    { k: 'nfs', type: 'NFS', label: 'NFS', pg: 'nfs', show: s => s.storage === 'nfs' },
+    { k: 'nfs', type: 'NFS', label: 'NFS', pg: 'nfs', show: nfsNet },
+    { k: 'vsanext', type: 'VSAN_EXTERNAL', label: 'vSAN storage client', pg: 'vsan-client', show: clientNet },
   ];
   const PROFILE = {
     default: { count: 1, storage: 1, nsx: 1 },
@@ -46,14 +52,34 @@
     return Object.assign({ id, label, type: 'password', req: pw, show: pw, pw: rule, help, api }, extra || {});
   }
   function poolNet(p, title, o) {
+    const show = st => createPool(st) && (!o.show || o.show(st));
+    const stat = st => show(st) && st[p + 'Mode'] !== 'dhcp';
     return [
-      { type: 'note', text: '<b>' + title + '</b>', show: o.show },
-      { id: p + 'Vlan', label: 'VLAN ID', type: 'text', fmt: 'vlan', req: true, ph: o.vlan, show: o.show, help: 'VLAN of this network.', api: 'networks[].vlanId' },
-      { id: p + 'Mtu', label: 'MTU', type: 'text', fmt: 'mtu', req: true, def: '9000', show: o.show, help: 'MTU of the VMkernel network. 9000 recommended.', api: 'networks[].mtu' },
-      { id: p + 'Gw', label: 'Gateway (CIDR notation)', type: 'text', fmt: 'gwcidr', req: true, ph: o.gw, show: o.show, help: 'Gateway with prefix length. Subnet and mask are derived.', api: ['networks[].gateway', 'networks[].subnet', 'networks[].mask'] },
-      { id: p + 'Start', label: 'IP range start', type: 'text', fmt: 'ipv4', req: true, ph: o.start, show: o.show, help: 'First address of the network pool range (one per host).', api: 'networks[].ipPools[].start' },
-      { id: p + 'End', label: 'IP range end', type: 'text', fmt: 'ipv4', req: true, ph: o.end, show: o.show, help: 'Last address of the network pool range.', api: 'networks[].ipPools[].end' },
+      { type: 'note', text: '<b>' + title + '</b>', show },
+      { id: p + 'Mode', label: 'IP assignment', type: 'select', def: 'static', rerender: true, show, options: [
+        { v: 'static', l: 'Static', d: 'SDDC Manager assigns VMkernel IPs from the range below.' },
+        { v: 'dhcp', l: 'DHCP', d: 'VMkernel adapters get IPs from a DHCP server on this VLAN. No range needed.' },
+      ], help: 'Workbook "IP Assignment" of the network pool network.', api: 'networks[].ipAddressAssignmentMode' },
+      { id: p + 'Vlan', label: 'VLAN ID', type: 'text', fmt: 'vlan', req: true, ph: o.vlan, show, help: 'VLAN of this network.', api: 'networks[].vlanId' },
+      { id: p + 'Mtu', label: 'MTU', type: 'text', fmt: 'mtu', req: true, def: '9000', show, help: 'MTU of the VMkernel network. 9000 recommended.', api: 'networks[].mtu' },
+      { id: p + 'Gw', label: 'Gateway (CIDR notation)', type: 'text', fmt: 'gwcidr', req: true, ph: o.gw, show: stat, help: 'Gateway with prefix length. Subnet and mask are derived.', api: ['networks[].gateway', 'networks[].subnet', 'networks[].mask'] },
+      { id: p + 'Start', label: 'IP range start', type: 'text', fmt: 'ipv4', req: true, ph: o.start, show: stat, help: 'First address of the network pool range (one per host).', api: 'networks[].ipPools[].start' },
+      { id: p + 'End', label: 'IP range end', type: 'text', fmt: 'ipv4', req: true, ph: o.end, show: stat, help: 'Last address of the network pool range.', api: 'networks[].ipPools[].end' },
     ];
+  }
+
+  function trafficFields() {
+    const out = [];
+    for (const t of TRAFFIC) {
+      const show = s => full(s) && t.show(s) && !!s.pgAdvanced;
+      out.push(
+        { type: 'note', text: '<b>Port group: ' + t.label + '</b>', show },
+        { id: 'team_' + t.k, label: 'Load balancing', type: 'select', options: C.pgTeaming, show, help: 'Teaming policy of the port group (ignored on a LAG switch).', api: API + '.portGroupSpecs[].teamingPolicy' },
+        { id: 'u1_' + t.k, label: 'uplink1', type: 'select', options: STATE, def: 'Active', show, help: 'Failover order of uplink1. Uplinks 3 and higher are always active.', api: API + '.portGroupSpecs[].activeUplinks' },
+        { id: 'u2_' + t.k, label: 'uplink2', type: 'select', options: STATE, def: 'Active', show, help: 'Failover order of uplink2.', api: API + '.portGroupSpecs[].standByUplinks' },
+      );
+    }
+    return out;
   }
 
   const vds = [1, 2, 3].map(i => C.vdsFields(i, ['vmnic0,vmnic1', 'vmnic2,vmnic3', 'vmnic4,vmnic5'][i - 1], vdsCount, vdsNameAuto(i), API)).flat()
@@ -70,29 +96,43 @@
         id: 'general', title: 'General',
         fields: [
           { id: 'domainName', label: 'Workload domain name', type: 'text', req: true, ph: 'sfo-w01', pattern: '^[a-zA-Z0-9-]{3,20}$', patternMsg: '3-20 characters: letters, digits and hyphens', help: 'Name of the workload domain in SDDC Manager.', api: 'domainName' },
-          { id: 'storage', label: 'Principal storage', type: 'select', options: C.storage, def: 'vsan-esa', rerender: true, help: 'Principal storage of the first cluster.', api: 'computeSpec.clusterSpecs[].datastoreSpec' },
-          { id: 'supervisor', label: 'Enable vSphere Supervisor', type: 'checkbox', def: false, rerender: true, help: 'Activate a single-zone vSphere Supervisor with NSX VPC networking during domain creation.', api: 'computeSpec.clusterSpecs[].supervisorActivationSpec' },
+          { id: 'deployType', label: 'Deployment type', type: 'select', def: 'full', rerender: true, options: [
+            { v: 'full', l: 'Full deployment with cluster', d: 'vCenter, NSX and the first vSphere cluster with hosts, storage and networking.' },
+            { v: 'infra', l: 'Deploy infrastructure only', d: 'Shell domain: vCenter and NSX only, no cluster. Add clusters later. Only the domain spec is generated.' },
+          ], help: 'Workbook "Deployment Type".', api: 'computeSpec' },
+          { id: 'storage', label: 'Principal storage', type: 'select', show: full, options: C.storage.slice(0, 2).concat([{ v: 'vsan-max', l: 'vSAN Storage Cluster (vSAN Max)', d: 'Disaggregated vSAN ESA storage cluster that provides storage to other (client) clusters. ESA-certified hosts required.' }], C.storage.slice(2)), def: 'vsan-esa', rerender: true, help: 'Workbook "Principal Storage Model" of the first cluster.', api: 'computeSpec.clusterSpecs[].datastoreSpec' },
+          { id: 'secondary', label: 'Secondary storage network', type: 'select', show: full, def: 'none', rerender: true, options: [
+            { v: 'none', l: 'None' },
+            { v: 'nfs', l: 'Secondary NFS storage network', d: 'Adds an NFS VMkernel network (network pool + port group) for mounting additional NFS datastores later. Not available when NFS is the principal storage.' },
+            { v: 'client', l: 'vSAN storage client network', d: 'Separate network for vSAN Max client traffic (VSAN_EXTERNAL). Only with vSAN Storage Cluster.' },
+          ], help: 'Workbook "Secondary Storage".' },
+          { id: 'supervisor', label: 'Enable vSphere Supervisor', type: 'checkbox', def: false, rerender: true, show: full, help: 'Activate a single-zone vSphere Supervisor with NSX VPC networking during domain creation.', api: 'computeSpec.clusterSpecs[].supervisorActivationSpec' },
           { id: 'autoPw', label: 'Auto-generate passwords', type: 'checkbox', def: false, rerender: true, help: 'Leave vCenter / NSX passwords out so SDDC Manager generates them. ESX root password is still needed for commissioning.' },
           { id: 'noLicense', label: 'Deploy without license keys', type: 'checkbox', def: true, help: 'VCF 9 licenses through VCF Operations; keep enabled unless you use legacy keys.', api: 'deployWithoutLicenseKeys' },
         ],
       },
       {
-        id: 'pool', title: '1. Network pool',
+        id: 'pool', title: '1. Network pool', show: full,
         intro: 'vMotion and storage IP pools for the hosts. Created in SDDC Manager before commissioning the hosts.',
         fields: [
-          { id: 'poolName', label: 'Network pool name', type: 'text', auto: (s, g) => g('domainName') ? g('domainName') + '-np01' : '', help: 'Name of the SDDC Manager network pool.', api: 'name' },
+          { id: 'poolMode', label: 'VCF network pool', type: 'select', def: 'create', rerender: true, options: [
+            { v: 'create', l: 'Create a new VCF network pool', d: 'Generates the network pool JSON (file 1).' },
+            { v: 'reuse', l: 'Re-use an existing VCF network pool', d: 'Hosts are commissioned into an existing pool; no network pool file is generated.' },
+          ], help: 'Workbook "VCF Network Pool Type".' },
+          { id: 'poolName', label: 'Network pool name', type: 'text', auto: (s, g) => g('domainName') ? g('domainName') + '-np01' : '', help: 'Name of the SDDC Manager network pool (new or existing).', api: 'name' },
           ...poolNet('vmotion', 'vMotion', { vlan: '1312', gw: '10.13.12.1/24', start: '10.13.12.101', end: '10.13.12.116' }),
           ...poolNet('vsan', 'vSAN', { vlan: '1313', gw: '10.13.13.1/24', start: '10.13.13.101', end: '10.13.13.116', show: isVsan }),
-          ...poolNet('nfs', 'NFS', { vlan: '1315', gw: '10.13.15.1/24', start: '10.13.15.101', end: '10.13.15.116', show: s => s.storage === 'nfs' }),
+          ...poolNet('nfs', 'NFS', { vlan: '1315', gw: '10.13.15.1/24', start: '10.13.15.101', end: '10.13.15.116', show: nfsNet }),
+          ...poolNet('vsanext', 'vSAN storage client', { vlan: '1316', gw: '10.13.16.1/24', start: '10.13.16.101', end: '10.13.16.116', show: clientNet }),
         ],
       },
       {
-        id: 'hosts', title: '2. Hosts',
+        id: 'hosts', title: '2. Hosts', show: full,
         intro: 'Hosts to commission and add to the first cluster. After commissioning, copy each host ID from SDDC Manager into the table.',
         fields: [
           { id: 'esxPw', label: 'ESX root password', type: 'password', req: true, pw: C.pw.esx, help: 'Root password of the hosts, used for commissioning.', api: 'password' },
           { id: 'poolId', label: 'Network pool ID', type: 'text', help: 'ID of the network pool from <code>GET /v1/network-pools</code>. Leave empty to keep a placeholder in the commissioning JSON.', api: 'networkPoolId' },
-          { id: 'skipHcl', label: 'Skip vSAN ESA HCL compatibility pre-check', type: 'checkbox', show: s => s.storage === 'vsan-esa', help: 'Bypass vSAN ESA HCL validation during commissioning (hosts without certified disks or when SDDC Manager cannot verify disks).', api: 'skipHclCompatibilityPrecheck' },
+          { id: 'skipHcl', label: 'Skip vSAN ESA HCL compatibility pre-check', type: 'checkbox', show: isEsa, help: 'Bypass vSAN ESA HCL validation during commissioning (hosts without certified disks or when SDDC Manager cannot verify disks).', api: 'skipHclCompatibilityPrecheck' },
           {
             id: 'hosts', label: 'Hosts', type: 'rows', min: 2, max: 64, initial: 3, addLabel: 'Add host',
             help: 'Hosts for the first cluster of the domain.',
@@ -107,6 +147,7 @@
         id: 'vcenter', title: '3. vCenter',
         fields: [
           fqdnField('vcFqdn', 'vCenter FQDN', 'sfo-w01-vc01.sfo.rainpole.io', 'FQDN of the workload domain vCenter. Must resolve to an IP on the management VM network.', 'vcenterSpec.networkDetailsSpec.dnsName'),
+          { id: 'vcIp', label: 'vCenter IP address', type: 'text', fmt: 'ipv4', help: 'Optional (deprecated in the API, the FQDN is enough). Workbook value; must match DNS.', api: 'vcenterSpec.networkDetailsSpec.ipAddress' },
           { id: 'vcName', label: 'vCenter VM name', type: 'text', auto: (s, g) => g('vcFqdn') ? N.shortName(g('vcFqdn')) : '', help: 'Virtual machine name of the vCenter appliance.', api: 'vcenterSpec.name' },
           { id: 'datacenter', label: 'Datacenter name', type: 'text', auto: domAuto('-dc01'), help: 'vSphere datacenter object name.', api: 'vcenterSpec.datacenterName' },
           { id: 'vcSize', label: 'vCenter size', type: 'select', options: C.vcSize, def: 'medium', help: 'vCenter appliance size.', api: 'vcenterSpec.vmSize' },
@@ -117,15 +158,15 @@
         ],
       },
       {
-        id: 'cluster', title: '4. Cluster and storage',
+        id: 'cluster', title: '4. Cluster and storage', show: full,
         fields: [
           { id: 'clusterName', label: 'Cluster name', type: 'text', auto: domAuto('-cl01'), help: 'Name of the first cluster.', api: 'computeSpec.clusterSpecs[].name' },
           { id: 'imageId', label: 'Cluster image ID', type: 'text', help: 'ID of the vSphere Lifecycle Manager cluster image (SDDC Manager &gt; Lifecycle Management &gt; Image Management, or <code>GET /v1/personalities</code>). Required for vCenter 9.0 and later.', api: 'computeSpec.clusterSpecs[].clusterImageId' },
           { id: 'evc', label: 'EVC mode', type: 'select', def: '', options: [{ v: '', l: 'Disabled' }].concat(['INTEL_SKYLAKE', 'INTEL_CASCADELAKE', 'INTEL_ICELAKE', 'INTEL_SAPPHIRERAPIDS', 'AMD_ZEN', 'AMD_ZEN2', 'AMD_ZEN3', 'AMD_ZEN4'].map(v => ({ v, l: v }))), help: 'Enhanced vMotion Compatibility baseline.', api: 'computeSpec.clusterSpecs[].advancedOptions.evcMode' },
           { id: 'datastoreName', label: 'Datastore name', type: 'text', maxLen: 80, req: true, auto: (s, g) => g('clusterName') ? g('clusterName') + '-ds-' + (isVsan(s) ? 'vsan01' : s.storage === 'nfs' ? 'nfs01' : 'vmfs01') : '', help: 'Datastore name (required for Day-N operations).', api: 'computeSpec.clusterSpecs[].datastoreSpec.vsanDatastoreSpec.datastoreName' },
-          { id: 'ftt', label: 'Failures to tolerate', type: 'select', options: C.ftt, def: '1', show: s => s.storage === 'vsan-osa', help: 'vSAN OSA failures to tolerate.', api: 'computeSpec.clusterSpecs[].datastoreSpec.vsanDatastoreSpec.failuresToTolerate' },
+          { id: 'ftt', label: 'Failures to tolerate', type: 'select', options: C.ftt.concat([{ v: '3', l: '3 failures (RAID-1 mirroring)', d: 'Tolerates three host failures. Requires at least 7 hosts.' }]), def: '1', show: s => s.storage === 'vsan-osa', help: 'vSAN OSA failures to tolerate.', api: 'computeSpec.clusterSpecs[].datastoreSpec.vsanDatastoreSpec.failuresToTolerate' },
           { id: 'dedup', label: 'Deduplication and compression', type: 'checkbox', show: s => s.storage === 'vsan-osa', help: 'All-flash vSAN OSA only.', api: 'computeSpec.clusterSpecs[].datastoreSpec.vsanDatastoreSpec.dedupAndCompressionEnabled' },
-          { id: 'esaAutoClaim', label: 'Allow auto claim of HCL incompatible disks', type: 'checkbox', show: s => s.storage === 'vsan-esa', help: 'Lets vSAN ESA claim non-certified disks (labs only).', api: 'computeSpec.clusterSpecs[].datastoreSpec.vsanDatastoreSpec.esaConfig.skipHclAutoDiskClaim' },
+          { id: 'esaAutoClaim', label: 'Allow auto claim of HCL incompatible disks', type: 'checkbox', show: isEsa, help: 'Lets vSAN ESA claim non-certified disks (labs only).', api: 'computeSpec.clusterSpecs[].datastoreSpec.vsanDatastoreSpec.esaConfig.skipHclAutoDiskClaim' },
           { id: 'dit', label: 'vSAN data-in-transit encryption', type: 'checkbox', show: isVsan, rerender: true, help: 'Encrypt vSAN traffic between hosts.', api: 'computeSpec.clusterSpecs[].datastoreSpec.vsanDatastoreSpec.encryptionConfig.dataInTransitConfig.enable' },
           { id: 'rekey', label: 'Rekey interval', type: 'select', options: C.rekey, def: '1440', show: s => isVsan(s) && s.dit, rerender: true, help: 'Key rotation interval.' },
           { id: 'rekeyCustom', label: 'Custom rekey interval (minutes)', type: 'text', fmt: 'int', req: true, show: s => isVsan(s) && s.dit && s.rekey === 'custom', help: '30 - 10080 minutes.', check: v => (Number(v) >= 30 && Number(v) <= 10080) || 'Between 30 and 10080 minutes' },
@@ -134,7 +175,7 @@
         ],
       },
       {
-        id: 'vds', title: '5. Distributed switches',
+        id: 'vds', title: '5. Distributed switches', show: full,
         intro: 'Host management (vmk0) stays on the existing ESX management VLAN; the port group is created on switch 1.',
         fields: [
           { id: 'vdsProfile', label: 'Switch profile', type: 'select', options: C.vdsProfile, def: 'default', rerender: true, help: 'Pre-configured switch layouts.' },
@@ -142,38 +183,46 @@
           ...TRAFFIC.map(t => ({ id: 'vdsFor_' + t.k, label: t.label + ' on switch', type: 'select', def: '1', show: s => custom(s) && t.show(s) && Number(s.vdsCount) > 1, options: [{ v: '1', l: 'Switch 1' }, { v: '2', l: 'Switch 2' }, { v: '3', l: 'Switch 3' }], help: 'Switch carrying ' + t.label + '.' })),
           { id: 'vdsFor_nsx', label: 'NSX on switch', type: 'select', def: '1', show: s => custom(s) && Number(s.vdsCount) > 1, options: [{ v: '1', l: 'Switch 1' }, { v: '2', l: 'Switch 2' }, { v: '3', l: 'Switch 3' }], help: 'Switch prepared for NSX.' },
           { type: 'note', kind: 'info', text: s => layoutText(s) },
-          { id: 'mgmtPg', label: 'ESX management port group', type: 'text', auto: (s, g) => g('vds1Name') ? g('vds1Name') + '-pg-esx-mgmt' : '', help: 'Port group for host management.', api: API + '.portGroupSpecs[].name' },
-          { id: 'vmotionPg', label: 'vMotion port group', type: 'text', auto: (s, g) => { const v = g('vds' + vdsOf(s, 'vmotion') + 'Name'); return v ? v + '-pg-vmotion' : ''; }, help: 'Port group for vMotion.', api: API + '.portGroupSpecs[].name' },
-          { id: 'storagePg', label: 'Storage port group', type: 'text', show: storageNet, auto: (s, g) => { const v = g('vds' + vdsOf(s, isVsan(s) ? 'vsan' : 'nfs') + 'Name'); return v ? v + '-pg-' + (isVsan(s) ? 'vsan' : 'nfs') : ''; }, help: 'Port group for vSAN or NFS.', api: API + '.portGroupSpecs[].name' },
-          { id: 'pgTeam', label: 'Port group load balancing', type: 'select', options: C.pgTeaming, def: 'loadbalance_loadbased', help: 'Teaming policy for the port groups (switches with a LAG always use explicit failover with the LAG).', api: API + '.portGroupSpecs[].teamingPolicy' },
           ...vds,
+          { id: 'pgAdvanced', label: 'Customize port group load balancing and uplinks', type: 'checkbox', def: false, rerender: true, help: 'When off, port groups use "Route based on physical NIC load" with all uplinks active (workbook default).' },
+          ...TRAFFIC.map(t => ({ id: 'pg_' + t.k, label: t.label + ' port group', type: 'text', show: s => full(s) && t.show(s), maxLen: 80, auto: (s, g) => { const v = g('vds' + vdsOf(s, t.k) + 'Name'); return v ? v + '-pg-' + t.pg : ''; }, help: 'Distributed port group for ' + t.label + ' traffic.', api: API + '.portGroupSpecs[].name' })),
+          ...trafficFields(),
         ],
       },
       {
         id: 'nsx', title: '6. NSX Manager',
         intro: 'To share an existing NSX instance with another workload domain, enter that NSX instance VIP and node FQDNs.',
         fields: [
+          { id: 'nsxInstance', label: 'NSX Manager instance', type: 'select', def: 'new', rerender: true, options: [
+            { v: 'new', l: 'Create new NSX Manager instance', d: 'Recommended if the domain does not need workload mobility with an existing domain.' },
+            { v: 'join', l: 'Join existing NSX Manager instance', d: 'Share the NSX instance of another workload domain. Enter that instance\'s VIP, appliance FQDNs and passwords below.' },
+          ], help: 'Workbook "NSX Manager Instance Options".' },
           { id: 'nsxModel', label: 'Deployment size', type: 'select', def: 'ha', rerender: true, options: [
             { v: 'ha', l: 'NSX Management Cluster (3 nodes)', d: 'Three NSX Manager appliances. Recommended for production.' },
             { v: 'single', l: 'Single NSX Manager appliance', d: 'One appliance only. Labs / PoC.' },
           ], help: 'Number of NSX Manager appliances.' },
           { id: 'nsxSize', label: 'Appliance size', type: 'select', def: 'medium', options: [{ v: 'small', l: 'Small', d: 'Lab only.' }].concat(C.nsxSize), help: 'NSX Manager form factor.', api: 'nsxTSpec.formFactor' },
           fqdnField('nsxVip', 'Cluster (VIP) FQDN', 'sfo-w01-nsx01.sfo.rainpole.io', 'FQDN of the NSX Manager cluster VIP.', 'nsxTSpec.vipFqdn'),
+          { id: 'nsxVipIp', label: 'Cluster (VIP) IP address', type: 'text', fmt: 'ipv4', help: 'Optional (deprecated in the API). Workbook value; must match DNS.', api: 'nsxTSpec.vip' },
           fqdnField('nsxA', 'Appliance 1 FQDN', 'sfo-w01-nsx01a.sfo.rainpole.io', 'NSX Manager node A.', 'nsxTSpec.nsxManagerSpecs[].networkDetailsSpec.dnsName'),
           fqdnField('nsxB', 'Appliance 2 FQDN', 'sfo-w01-nsx01b.sfo.rainpole.io', 'NSX Manager node B.', 'nsxTSpec.nsxManagerSpecs[].networkDetailsSpec.dnsName', { show: nsxHA }),
           fqdnField('nsxC', 'Appliance 3 FQDN', 'sfo-w01-nsx01c.sfo.rainpole.io', 'NSX Manager node C.', 'nsxTSpec.nsxManagerSpecs[].networkDetailsSpec.dnsName', { show: nsxHA }),
+          { id: 'nsxAIp', label: 'Appliance 1 IP address', type: 'text', fmt: 'ipv4', help: 'Optional (deprecated in the API). Workbook value; must match DNS.', api: 'nsxTSpec.nsxManagerSpecs[].networkDetailsSpec.ipAddress' },
+          { id: 'nsxBIp', label: 'Appliance 2 IP address', type: 'text', fmt: 'ipv4', show: nsxHA, help: 'Optional (deprecated in the API).', api: 'nsxTSpec.nsxManagerSpecs[].networkDetailsSpec.ipAddress' },
+          { id: 'nsxCIp', label: 'Appliance 3 IP address', type: 'text', fmt: 'ipv4', show: nsxHA, help: 'Optional (deprecated in the API).', api: 'nsxTSpec.nsxManagerSpecs[].networkDetailsSpec.ipAddress' },
           pwField('nsxAdminPw', 'Admin password', C.pw.nsx, 'NSX admin password.', 'nsxTSpec.nsxManagerAdminPassword'),
           pwField('nsxRootPw', 'Root password', C.pw.nsx, 'NSX root password.', 'nsxTSpec.nsxManagerRootPassword'),
           pwField('nsxAuditPw', 'Audit password', C.pw.nsx, 'NSX audit password.', 'nsxTSpec.nsxManagerAuditPassword'),
-          { id: 'nsxMode', label: 'Host switch operational mode', type: 'select', options: C.nsxMode, def: 'default', help: 'NSX datapath mode on the hosts.', api: API + '.nsxtSwitchConfig.hostSwitchOperationalMode' },
-          { id: 'overlayTz', label: 'Overlay transport zone name', type: 'text', show: fullStack, auto: (s, g) => g('nsxVip') ? 'overlay-tz-' + N.shortName(g('nsxVip')) : '', help: 'NSX overlay transport zone.', api: API + '.nsxtSwitchConfig.transportZones[].name' },
-          { id: 'vlanTz', label: 'VLAN transport zone name', type: 'text', def: 'nsx-vlan-transportzone-0', help: 'NSX VLAN transport zone.', api: API + '.nsxtSwitchConfig.transportZones[].name' },
+          { id: 'nsxMode', label: 'Host switch operational mode', type: 'select', options: C.nsxMode, def: 'default', show: full, help: 'NSX datapath mode on the hosts.', api: API + '.nsxtSwitchConfig.hostSwitchOperationalMode' },
+          { id: 'overlayTz', label: 'Overlay transport zone name', type: 'text', show: s => full(s) && fullStack(s), auto: (s, g) => g('nsxVip') ? 'overlay-tz-' + N.shortName(g('nsxVip')) : '', help: 'NSX overlay transport zone.', api: API + '.nsxtSwitchConfig.transportZones[].name' },
+          { id: 'vlanTzOn', label: 'Transport zone type: NSX-VLAN', type: 'checkbox', def: true, rerender: true, show: full, help: 'Workbook "Transport Zone Type: NSX-VLAN". Attach a VLAN transport zone to the NSX switch (needed for VLAN-backed segments, Edge uplinks).' },
+          { id: 'vlanTz', label: 'VLAN transport zone name', type: 'text', def: 'nsx-vlan-transportzone-0', show: s => full(s) && s.vlanTzOn, help: 'NSX VLAN transport zone.', api: API + '.nsxtSwitchConfig.transportZones[].name' },
           { id: 'vpcType', label: 'VPC network configuration', type: 'select', options: C.vpcType, def: 'full', rerender: true, help: 'NSX VPC model.', api: 'nsxTSpec.vpcSpec.vpcNetworkConfigurationType' },
           { id: 'vpcConn', label: 'Network connectivity', type: 'select', options: C.vpcConnectivity, def: 'centralized', rerender: true, show: fullStack, help: 'External connectivity for VPCs.', api: 'nsxTSpec.vpcSpec.dtgwSpec' },
         ],
       },
       {
-        id: 'tep', title: '7. Host overlay (TEP)', show: fullStack,
+        id: 'tep', title: '7. Host overlay (TEP)', show: s => full(s) && fullStack(s),
         fields: [
           { id: 'tepVlan', label: 'Host overlay VLAN ID', type: 'text', fmt: 'vlan', req: true, ph: '1314', help: 'VLAN for host TEPs (transport VLAN of the uplink profile).', api: 'computeSpec.clusterSpecs[].networkSpec.nsxClusterSpec.nsxTClusterSpec.uplinkProfiles[].transportVlan' },
           { id: 'tepMode', label: 'TEP IP assignment', type: 'select', options: C.tepMode, def: 'pool', rerender: true, help: 'How host TEPs get IPs.' },
@@ -185,6 +234,8 @@
           { id: 'uplinkProfile', label: 'NSX uplink profile name', type: 'text', auto: domAuto('-cl01-uplink-profile01'), help: 'Uplink profile created in NSX for the hosts.', api: 'computeSpec.clusterSpecs[].networkSpec.nsxClusterSpec.nsxTClusterSpec.uplinkProfiles[].name' },
           { id: 'netProfile', label: 'Network profile name', type: 'text', auto: domAuto('-cl01-network-profile01'), help: 'SDDC Manager network profile that binds the switch, uplink profile and IP pool.', api: 'computeSpec.clusterSpecs[].networkSpec.networkProfiles[].name' },
           { id: 'nsxTeam', label: 'NSX teaming policy', type: 'select', options: C.nsxTeaming, def: 'LOADBALANCE_SRCID', help: 'Teaming in the uplink profile. A LAG always uses failover order.', api: 'computeSpec.clusterSpecs[].networkSpec.nsxClusterSpec.nsxTClusterSpec.uplinkProfiles[].teamings[].policy' },
+          { id: 'nsxU1', label: 'Active uplink uplink-1', type: 'select', options: STATE.slice(0, 2), def: 'Active', help: 'Workbook "Active Uplink uplink-1". Standby is used with failover order.', api: 'computeSpec.clusterSpecs[].networkSpec.nsxClusterSpec.nsxTClusterSpec.uplinkProfiles[].teamings[].activeUplinks' },
+          { id: 'nsxU2', label: 'Active uplink uplink-2', type: 'select', options: STATE.slice(0, 2), def: 'Active', help: 'Workbook "Active Uplink uplink-2".', api: 'computeSpec.clusterSpecs[].networkSpec.nsxClusterSpec.nsxTClusterSpec.uplinkProfiles[].teamings[].standByUplinks' },
         ],
       },
       {
@@ -203,7 +254,7 @@
         ],
       },
       {
-        id: 'sup', title: '9. vSphere Supervisor', show: sup,
+        id: 'sup', title: '9. vSphere Supervisor', show: s => full(s) && sup(s),
         intro: 'Single-zone vSphere Supervisor with NSX VPC networking.',
         fields: [
           { id: 'supName', label: 'Supervisor name', type: 'text', auto: domAuto('-sn01'), help: 'Name of the Supervisor.', api: 'computeSpec.clusterSpecs[].supervisorActivationSpec.supervisorName' },
@@ -237,7 +288,21 @@
   // ---------- rules ----------
   form.rules = function (s, g) {
     const out = [];
+    if (s.nsxInstance === 'join') out.push({ level: 'info', field: 'nsxInstance', msg: 'Joining an existing NSX instance: the NSX values must be those of the existing instance' });
+    if (!full(s)) return out;
     const hosts = s.hosts.filter(h => (h.fqdn || '').trim());
+    if (s.storage === 'vsan-osa' && s.ftt === '3' && hosts.length < 7) out.push({ level: 'error', field: 'hosts', msg: 'vSAN OSA with FTT=3 needs at least 7 hosts' });
+    if (s.secondary === 'client' && s.storage !== 'vsan-max') out.push({ level: 'error', field: 'secondary', msg: 'vSAN storage client network requires vSAN Storage Cluster as principal storage' });
+    if (s.secondary === 'nfs' && s.storage === 'nfs') out.push({ level: 'error', field: 'secondary', msg: 'Secondary NFS network is not available when NFS is the principal storage' });
+    if (s.nsxTeam === 'FAILOVER_ORDER' && s.nsxU1 === 'Active' && s.nsxU2 === 'Active') out.push({ level: 'warn', field: 'nsxU2', msg: 'NSX failover order with two active uplinks; set one to Standby' });
+    if (s.nsxU1 !== 'Active' && s.nsxU2 !== 'Active') out.push({ level: 'error', field: 'nsxU1', msg: 'NSX teaming needs at least one active uplink' });
+    if (s.pgAdvanced) {
+      for (const t of TRAFFIC) {
+        if (!t.show(s)) continue;
+        if (s['u1_' + t.k] !== 'Active' && s['u2_' + t.k] !== 'Active') out.push({ level: 'error', field: 'u1_' + t.k, msg: t.label + ' port group needs at least one Active uplink' });
+        if (s['team_' + t.k] === 'failover_explicit' && s['u1_' + t.k] === 'Active' && s['u2_' + t.k] === 'Active') out.push({ level: 'warn', field: 'u2_' + t.k, msg: t.label + ': explicit failover with two active uplinks; set one to Standby' });
+      }
+    }
     if (isVsan(s) && hosts.length < 3) out.push({ level: 'error', field: 'hosts', msg: 'vSAN needs at least 3 hosts' });
     if (s.storage === 'vsan-osa' && s.ftt === '2' && hosts.length < 5) out.push({ level: 'error', field: 'hosts', msg: 'vSAN OSA with FTT=2 needs at least 5 hosts' });
     const seen = {};
@@ -248,13 +313,17 @@
     });
     const missingIds = hosts.filter(h => !(h.id || '').trim()).length;
     if (missingIds) out.push({ level: 'warn', field: 'hosts', msg: missingIds + ' host(s) have no SDDC Manager host ID; the domain JSON contains placeholders until you commission the hosts and paste the IDs' });
-    if (!(s.poolId || '').trim()) out.push({ level: 'info', field: 'poolId', msg: 'Network pool ID is empty; the commissioning JSON contains a placeholder (the UI variant uses the pool name instead)' });
+    if (!(s.poolId || '').trim() && s.poolMode === 'reuse') out.push({ level: 'info', field: 'poolId', msg: 'Re-using a network pool: enter the existing pool ID or replace the placeholder in the commissioning JSON' });
+    else if (!(s.poolId || '').trim()) out.push({ level: 'info', field: 'poolId', msg: 'Network pool ID is empty; the commissioning JSON contains a placeholder (the UI variant uses the pool name instead)' });
     if (!(s.imageId || '').trim()) out.push({ level: 'warn', field: 'imageId', msg: 'Cluster image ID is empty; it is required for vCenter 9.0 and later' });
 
     const n = hosts.length;
-    C.rangeRules(out, { label: 'vMotion', gw: s.vmotionGw, start: s.vmotionStart, end: s.vmotionEnd, fieldStart: 'vmotionStart', fieldEnd: 'vmotionEnd', need: n, needMsg: 'needs one per host (' + n + ')' });
-    if (isVsan(s)) C.rangeRules(out, { label: 'vSAN', gw: s.vsanGw, start: s.vsanStart, end: s.vsanEnd, fieldStart: 'vsanStart', fieldEnd: 'vsanEnd', need: n, needMsg: 'needs one per host (' + n + ')' });
-    if (s.storage === 'nfs') C.rangeRules(out, { label: 'NFS', gw: s.nfsGw, start: s.nfsStart, end: s.nfsEnd, fieldStart: 'nfsStart', fieldEnd: 'nfsEnd', need: n, needMsg: 'needs one per host (' + n + ')' });
+    const poolNets = [['vmotion', 'vMotion', () => true], ['vsan', 'vSAN', isVsan], ['nfs', 'NFS', nfsNet], ['vsanext', 'vSAN storage client', clientNet]];
+    if (createPool(s)) {
+      for (const [k, label, on] of poolNets) {
+        if (on(s) && s[k + 'Mode'] !== 'dhcp') C.rangeRules(out, { label, gw: s[k + 'Gw'], start: s[k + 'Start'], end: s[k + 'End'], fieldStart: k + 'Start', fieldEnd: k + 'End', need: n, needMsg: 'needs one per host (' + n + ')' });
+      }
+    }
     if (fullStack(s) && s.tepMode === 'pool' && !s.tepReuse) {
       const i = vdsOf(s, 'nsx');
       const need = s['vds' + i + 'Type'] === 'lag' ? n : n * (C.list(s['vds' + i + 'Nics']).length || 2);
@@ -265,8 +334,12 @@
       if (cnt && cnt < 5) out.push({ level: 'info', field: 'cpEnd', msg: 'Supervisor control plane range has ' + cnt + ' addresses; 5 are recommended for upgrades' });
       if (!fullStack(s)) out.push({ level: 'warn', field: 'vpcType', msg: 'vSphere Supervisor with NSX VPC networking requires Full Stack VPC' });
     }
-    const nets = [['vmotion', 'vMotion'], ['vsan', 'vSAN'], ['nfs', 'NFS'], ['tep', 'TEP'], ['dtgw', 'DTGW']].filter(([k]) =>
-      (k === 'vsan' ? isVsan(s) : k === 'nfs' ? s.storage === 'nfs' : k === 'tep' ? fullStack(s) && s.tepMode === 'pool' && !s.tepReuse : k === 'dtgw' ? distributed(s) : true));
+    const nets = [['vmotion', 'vMotion'], ['vsan', 'vSAN'], ['nfs', 'NFS'], ['vsanext', 'vSAN storage client'], ['tep', 'TEP'], ['dtgw', 'DTGW']].filter(([k]) => {
+      if (k === 'tep') return fullStack(s) && s.tepMode === 'pool' && !s.tepReuse;
+      if (k === 'dtgw') return distributed(s);
+      const pn = poolNets.find(x => x[0] === k);
+      return createPool(s) && pn[2](s) && s[k + 'Mode'] !== 'dhcp';
+    });
     for (let i = 0; i < nets.length; i++) {
       for (let j = i + 1; j < nets.length; j++) {
         if (N.cidrsOverlap(s[nets[i][0] + 'Gw'], s[nets[j][0] + 'Gw'])) out.push({ level: 'error', field: nets[j][0] + 'Gw', msg: nets[j][1] + ' subnet overlaps ' + nets[i][1] });
@@ -294,6 +367,7 @@
 
   // ---------- builders ----------
   function poolNetwork(s, type, p) {
+    if (s[p + 'Mode'] === 'dhcp') return { type, vlanId: C.int(s[p + 'Vlan']), mtu: C.int(s[p + 'Mtu']), ipAddressVersion: 'IPv4', ipAddressAssignmentMode: 'DHCP' };
     const c = N.parseCidr(s[p + 'Gw']);
     return {
       type,
@@ -306,6 +380,15 @@
     };
   }
 
+  function pgUplinks(s, g, k, i) {
+    const lag = lagOf(s, g, i);
+    if (lag) return { teamingPolicy: 'failover_explicit', activeUplinks: [lag], standByUplinks: [] };
+    const ups = uplinks(s, i);
+    if (!s.pgAdvanced) return { teamingPolicy: 'loadbalance_loadbased', activeUplinks: ups, standByUplinks: [] };
+    const st = n => (n === 0 ? s['u1_' + k] : n === 1 ? s['u2_' + k] : 'Active');
+    return { teamingPolicy: s['team_' + k], activeUplinks: ups.filter((_, n) => st(n) === 'Active'), standByUplinks: ups.filter((_, n) => st(n) === 'Standby') };
+  }
+
   function lagOf(s, g, i) {
     return s['vds' + i + 'Type'] === 'lag' ? g('vds' + i + 'LagName') : null;
   }
@@ -313,13 +396,15 @@
   form.build = function (s, g) {
     const files = [];
     const withPw = !s.autoPw;
-    const storageType = C.storageTypeCommission[s.storage];
+    const storageType = s.storage === 'vsan-max' ? 'VSAN_MAX' : C.storageTypeCommission[s.storage];
+    if (!full(s)) return [domainFile(s, g, null, withPw)];
 
     // 1. network pool
     const networks = [poolNetwork(s, 'VMOTION', 'vmotion')];
     if (isVsan(s)) networks.push(poolNetwork(s, 'VSAN', 'vsan'));
-    if (s.storage === 'nfs') networks.push(poolNetwork(s, 'NFS', 'nfs'));
-    files.push({
+    if (nfsNet(s)) networks.push(poolNetwork(s, 'NFS', 'nfs'));
+    if (clientNet(s)) networks.push(poolNetwork(s, 'VSAN_EXTERNAL', 'vsanext'));
+    if (createPool(s)) files.push({
       name: (g('domainName') || 'wld') + '-1-network-pool.json', title: 'Network pool', json: { name: g('poolName'), networks },
       method: 'POST', endpoint: '/v1/network-pools', note: 'Or SDDC Manager UI: Network Settings &gt; Network Pool.',
       schema: { api: 'sddc-manager-api', type: 'NetworkPool' },
@@ -329,7 +414,7 @@
     const hostRows = s.hosts.filter(h => (h.fqdn || '').trim());
     const commission = hostRows.map(h => {
       const o = { fqdn: h.fqdn.trim(), username: 'root', password: s.esxPw, storageType, networkPoolId: (s.poolId || '').trim() || POOL_ID_PH, networkPoolName: g('poolName') };
-      if (s.storage === 'vsan-esa' && s.skipHcl) o.skipHclCompatibilityPrecheck = true;
+      if (isEsa(s) && s.skipHcl) o.skipHclCompatibilityPrecheck = true;
       return o;
     });
     files.push({
@@ -352,16 +437,10 @@
     }
     const hostSpecs = hostRows.map(h => ({ id: (h.id || '').trim() || HOST_ID_PH, hostName: h.fqdn.trim(), hostNetworkSpec: { vmNics } }));
 
-    const pgs = [];
-    const pg = (name, type, k) => {
-      const i = vdsOf(s, k);
-      const lag = lagOf(s, g, i);
-      pgs.push({ i, spec: { name, transportType: type, teamingPolicy: lag ? 'failover_explicit' : s.pgTeam, activeUplinks: lag ? [lag] : uplinks(s, i), standByUplinks: [] } });
-    };
-    pg(g('mgmtPg'), 'MANAGEMENT', 'mgmt');
-    pg(g('vmotionPg'), 'VMOTION', 'vmotion');
-    if (isVsan(s)) pg(g('storagePg'), 'VSAN', 'vsan');
-    if (s.storage === 'nfs') pg(g('storagePg'), 'NFS', 'nfs');
+    const pgs = TRAFFIC.filter(t => t.show(s)).map(t => {
+      const i = vdsOf(s, t.k);
+      return { i, spec: Object.assign({ name: g('pg_' + t.k), transportType: t.type }, pgUplinks(s, g, t.k, i)) };
+    });
 
     const mode = s.nsxMode === 'default' ? 'ENS_INTERRUPT' : s.nsxMode;
     const vdsSpecs = [];
@@ -370,7 +449,7 @@
       const mine = pgs.filter(p => p.i === i).map(p => p.spec);
       if (mine.length) v.portGroupSpecs = mine;
       if (i === nsxIdx) {
-        const tz = [{ name: g('vlanTz'), transportType: 'VLAN' }];
+        const tz = s.vlanTzOn ? [{ name: g('vlanTz'), transportType: 'VLAN' }] : [];
         if (fullStack(s)) tz.push({ name: g('overlayTz'), transportType: 'OVERLAY' });
         v.nsxtSwitchConfig = { transportZones: tz, hostSwitchOperationalMode: mode };
       }
@@ -385,7 +464,7 @@
       const up = uplinks(s, nsxIdx);
       const teaming = lag
         ? { policy: 'FAILOVER_ORDER', activeUplinks: [lag], standByUplinks: [] }
-        : { policy: s.nsxTeam, activeUplinks: s.nsxTeam === 'FAILOVER_ORDER' ? up.slice(0, 1) : up, standByUplinks: s.nsxTeam === 'FAILOVER_ORDER' ? up.slice(1) : [] };
+        : { policy: s.nsxTeam, activeUplinks: up.filter((_, n) => (n === 0 ? s.nsxU1 : n === 1 ? s.nsxU2 : 'Active') === 'Active'), standByUplinks: up.filter((_, n) => (n === 0 ? s.nsxU1 : n === 1 ? s.nsxU2 : 'Active') === 'Standby') };
       const tcs = { uplinkProfiles: [{ name: g('uplinkProfile'), transportVlan: C.int(s.tepVlan), teamings: [teaming] }] };
       if (s.tepMode === 'pool') {
         const ip = { name: g('tepPoolName') };
@@ -407,8 +486,9 @@
     const datastoreSpec = {};
     if (isVsan(s)) {
       const v = { datastoreName: g('datastoreName') };
-      if (s.storage === 'vsan-esa') {
+      if (isEsa(s)) {
         v.esaConfig = { enabled: true };
+        if (s.storage === 'vsan-max') v.esaConfig.vsanMaxConfig = { enableVsanMax: true, enableVsanExternalNetwork: clientNet(s) };
         if (s.esaAutoClaim) v.esaConfig.skipHclAutoDiskClaim = true;
       } else {
         v.esaConfig = { enabled: false };
@@ -455,25 +535,36 @@
       cluster.supervisorActivationSpec = sa;
     }
 
-    const nsxNode = id => ({ name: N.shortName(g(id)), networkDetailsSpec: { dnsName: g(id) } });
+    files.push(domainFile(s, g, cluster, withPw));
+    return files;
+  };
+
+  function domainFile(s, g, cluster, withPw) {
+    const nsxNode = id => {
+      const d = { dnsName: g(id) };
+      if (g(id + 'Ip')) d.ipAddress = g(id + 'Ip');
+      return { name: N.shortName(g(id)), networkDetailsSpec: d };
+    };
     const nsx = {
       nsxManagerSpecs: [nsxNode('nsxA')].concat(nsxHA(s) ? [nsxNode('nsxB'), nsxNode('nsxC')] : []),
       vipFqdn: g('nsxVip'),
       formFactor: s.nsxSize,
     };
+    if (g('nsxVipIp')) nsx.vip = g('nsxVipIp');
     if (withPw) Object.assign(nsx, { nsxManagerAdminPassword: s.nsxAdminPw, nsxManagerRootPassword: s.nsxRootPw, nsxManagerAuditPassword: s.nsxAuditPw });
-    if (!fullStack(s)) nsx.vpcSpec = { vpcNetworkConfigurationType: 'VLAN_BACKED_VPC' };
+    // vpcNetworkConfigurationType only applies to shell (infrastructure only) domains
+    if (!full(s)) nsx.vpcSpec = { vpcNetworkConfigurationType: fullStack(s) ? 'FULL_STACK_VPC' : 'VLAN_BACKED_VPC' };
     if (distributed(s)) {
       const dt = { vlan: C.int(s.dtgwVlan), gatewayCidr: g('dtgwGw'), externalIpBlockCidr: g('dtgwExt') };
       if (g('dtgwPriv')) dt.privateTgwIpBlockCidr = g('dtgwPriv');
-      nsx.vpcSpec = { vpcNetworkConfigurationType: 'FULL_STACK_VPC', dtgwSpec: dt };
+      nsx.vpcSpec = Object.assign(nsx.vpcSpec || {}, { dtgwSpec: dt });
       nsx.vnaSpec = { vnaNodesSpec: [g('vnaA'), g('vnaB')] };
       if (!s.vnaUseMgmt) Object.assign(nsx.vnaSpec, { vnaManagementVlanId: C.int(s.vnaVlan), vnaManagementGatewayCidr: g('vnaGw') });
     }
 
     const vc = {
       name: g('vcName'),
-      networkDetailsSpec: { dnsName: g('vcFqdn') },
+      networkDetailsSpec: Object.assign({ dnsName: g('vcFqdn') }, g('vcIp') ? { ipAddress: g('vcIp') } : {}),
       datacenterName: g('datacenter'),
       vmSize: s.vcSize,
     };
@@ -483,23 +574,22 @@
     const dom = {
       domainName: g('domainName'),
       vcenterSpec: vc,
-      computeSpec: { clusterSpecs: [cluster] },
       nsxTSpec: nsx,
       ssoDomainSpec: { ssoDomainName: g('ssoDomain') },
       deployWithoutLicenseKeys: !!s.noLicense,
     };
+    if (cluster) dom.computeSpec = { clusterSpecs: [cluster] };
     if (withPw) dom.ssoDomainSpec.ssoDomainPassword = s.ssoPw;
-    files.push({
+    return {
       name: (g('domainName') || 'wld') + '-3-domain.json', title: 'Workload domain spec', main: true, json: dom,
       method: 'POST', endpoint: '/v1/domains  (validate first: POST /v1/domains/validations)',
       note: 'Replace placeholders (<code>&lt;--ENTER-...--&gt;</code>) with real IDs before submitting.',
       schema: { api: 'sddc-manager-api', type: 'DomainCreationSpec' },
-    });
-    return files;
-  };
+    };
+  }
 
   // ---------- import ----------
-  form.detect = j => j && !Array.isArray(j) && !!j.computeSpec && !!j.vcenterSpec;
+  form.detect = j => j && !Array.isArray(j) && !!j.vcenterSpec && (!!j.computeSpec || (j.domainName !== undefined && !!j.nsxTSpec));
   form.rawSchema = () => ({ api: 'sddc-manager-api', type: 'DomainCreationSpec' });
   const KNOWN = ['domainName', 'vcenterSpec', 'computeSpec', 'nsxTSpec', 'ssoDomainSpec', 'deployWithoutLicenseKeys'];
 
@@ -508,9 +598,11 @@
     const notes = [];
     const str = v => (v === undefined || v === null ? '' : String(v));
     s.domainName = str(j.domainName);
+    s.deployType = j.computeSpec ? 'full' : 'infra';
     s.noLicense = j.deployWithoutLicenseKeys !== false && j.deployWithoutLicenseKeys !== 'false';
     const vc = j.vcenterSpec || {};
     s.vcFqdn = str((vc.networkDetailsSpec || {}).dnsName);
+    s.vcIp = str((vc.networkDetailsSpec || {}).ipAddress);
     s.vcName = str(vc.name);
     s.datacenter = str(vc.datacenterName);
     if (vc.vmSize) s.vcSize = String(vc.vmSize).toLowerCase();
@@ -532,11 +624,13 @@
     if (ds.vsanDatastoreSpec) {
       const v = ds.vsanDatastoreSpec;
       const esa = v.esaConfig && (v.esaConfig.enabled === true || v.esaConfig.enabled === 'true');
-      s.storage = esa ? 'vsan-esa' : 'vsan-osa';
+      const max = esa && v.esaConfig.vsanMaxConfig && v.esaConfig.vsanMaxConfig.enableVsanMax;
+      s.storage = max ? 'vsan-max' : esa ? 'vsan-esa' : 'vsan-osa';
+      if (max && v.esaConfig.vsanMaxConfig.enableVsanExternalNetwork) s.secondary = 'client';
       s.datastoreName = str(v.datastoreName);
       s.esaAutoClaim = !!(v.esaConfig && v.esaConfig.skipHclAutoDiskClaim);
       s.dedup = !!v.dedupAndCompressionEnabled;
-      if (v.failuresToTolerate) s.ftt = String(v.failuresToTolerate) === '2' ? '2' : '1';
+      if (v.failuresToTolerate) s.ftt = ['1', '2', '3'].includes(String(v.failuresToTolerate)) ? String(v.failuresToTolerate) : '1';
       const dit = v.encryptionConfig && v.encryptionConfig.dataInTransitConfig;
       s.dit = !!(dit && dit.enable);
       if (dit && dit.rekeyInterval) {
@@ -562,7 +656,7 @@
     const stIdx = find('VSAN') || find('NFS') || 1;
     const count = vds.length || 1;
     let profile = 'custom';
-    if ((find('MANAGEMENT') || 1) === 1 && (find('VMOTION') || 1) === 1) {
+    if ((find('MANAGEMENT') || 1) === 1 && (find('VMOTION') || 1) === 1 && (find('VSAN_EXTERNAL') || 1) === 1) {
       if (count === 1) profile = 'default';
       else if (count === 2 && stIdx === 2 && nsxIdx === 1) profile = 'storage';
       else if (count === 2 && stIdx === 1 && nsxIdx === 2) profile = 'nsx';
@@ -588,14 +682,22 @@
         s['vds' + i + 'LacpTimeout'] = str(lag.lacpTimeoutMode).toUpperCase() || 'SLOW';
       }
       for (const p of v.portGroupSpecs || []) {
-        if (p.transportType === 'MANAGEMENT') s.mgmtPg = p.name;
-        if (p.transportType === 'VMOTION') s.vmotionPg = p.name;
-        if (p.transportType === 'VSAN' || p.transportType === 'NFS') s.storagePg = p.name;
-        if (!lag && p.teamingPolicy) s.pgTeam = p.teamingPolicy;
+        const t = TRAFFIC.find(x => x.type === p.transportType);
+        if (!t) continue;
+        s['pg_' + t.k] = str(p.name);
+        if (t.k === 'nfs' && s.storage !== 'nfs') s.secondary = 'nfs';
+        if (lag) continue;
+        const act = p.activeUplinks || [], stby = p.standByUplinks || [];
+        const stOf = u => act.includes(u) ? 'Active' : stby.includes(u) ? 'Standby' : 'Unused';
+        s['team_' + t.k] = p.teamingPolicy || 'loadbalance_loadbased';
+        s['u1_' + t.k] = stOf('uplink1');
+        s['u2_' + t.k] = stOf('uplink2');
+        if (s['team_' + t.k] !== 'loadbalance_loadbased' || s['u1_' + t.k] !== 'Active' || s['u2_' + t.k] !== 'Active') s.pgAdvanced = true;
       }
       if (v.nsxtSwitchConfig) {
         const m = v.nsxtSwitchConfig.hostSwitchOperationalMode;
         s.nsxMode = !m || m === 'ENS_INTERRUPT' ? 'default' : m;
+        s.vlanTzOn = (v.nsxtSwitchConfig.transportZones || []).some(z => z.transportType === 'VLAN');
         for (const z of v.nsxtSwitchConfig.transportZones || []) {
           if (z.transportType === 'OVERLAY') s.overlayTz = str(z.name);
           if (z.transportType === 'VLAN') s.vlanTz = str(z.name);
@@ -610,7 +712,12 @@
       s.uplinkProfile = str(up.name);
       s.tepVlan = str(up.transportVlan);
       const t = (up.teamings || [])[0];
-      if (t && t.policy) s.nsxTeam = t.policy;
+      if (t && t.policy) {
+        s.nsxTeam = t.policy;
+        const a = t.activeUplinks || [], b = t.standByUplinks || [];
+        s.nsxU1 = b.includes('uplink1') && !a.includes('uplink1') ? 'Standby' : 'Active';
+        s.nsxU2 = b.includes('uplink2') && !a.includes('uplink2') ? 'Standby' : 'Active';
+      }
     } else if (tcs.geneveVlanId !== undefined) s.tepVlan = str(tcs.geneveVlanId);
     const pool = (tcs.ipAddressPoolsSpec || [])[0];
     if (pool) {
@@ -633,11 +740,15 @@
     s.nsxVip = str(nsx.vipFqdn);
     const dn = m => str(((m || {}).networkDetailsSpec || {}).dnsName);
     s.nsxA = dn(mgrs[0]); s.nsxB = dn(mgrs[1]); s.nsxC = dn(mgrs[2]);
+    const ip = m => str(((m || {}).networkDetailsSpec || {}).ipAddress);
+    s.nsxAIp = ip(mgrs[0]); s.nsxBIp = ip(mgrs[1]); s.nsxCIp = ip(mgrs[2]);
+    s.nsxVipIp = str(nsx.vip);
     if (nsx.formFactor) s.nsxSize = String(nsx.formFactor).toLowerCase();
     s.nsxAdminPw = str(nsx.nsxManagerAdminPassword); s.nsxRootPw = str(nsx.nsxManagerRootPassword); s.nsxAuditPw = str(nsx.nsxManagerAuditPassword);
     s.autoPw = !(s.vcRootPw || s.nsxAdminPw || s.ssoPw);
     const vpc = nsx.vpcSpec || {};
     if (vpc.vpcNetworkConfigurationType === 'VLAN_BACKED_VPC') s.vpcType = 'vlan';
+    if (vpc.vpcNetworkConfigurationType === 'FULL_STACK_VPC') s.vpcType = 'full';
     if (vpc.dtgwSpec) {
       s.vpcConn = 'distributed';
       s.dtgwVlan = str(vpc.dtgwSpec.vlan); s.dtgwGw = str(vpc.dtgwSpec.gatewayCidr);

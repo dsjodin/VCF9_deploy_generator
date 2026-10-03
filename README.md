@@ -68,14 +68,24 @@ Three layers, shown in the Issues tab and next to each field:
 - `js/schema.js` is generated from the VCF Installer API and SDDC Manager API reference on developer.broadcom.com: `python3 tools/fetch_schema.py`.
 - JSON structure and defaults follow the official VCF.JSONGenerator PowerShell module that accompanies the workbook (for example VDS profiles, LAG uplink naming `<lag>-0`, transport zone names, VCF management services size by deployment model).
 
+## Workbook options covered
+
+The forms follow the choices of the workbook sheets:
+
+- **Deploy Management Domain:** new VCF fleet or new instance in an existing fleet (`VCF_EXTEND`), deployment model, Size, Customize appliance sizing, VM / VCF management network layout, VPC network configuration and gateway connectivity, storage (vSAN ESA/OSA, NFS, FC, data-in-transit, FTT, dedup), DNS/NTP, hosts, all networks and IP ranges, host overlay (IP pool or DHCP), VCF Operations (per-node root passwords), management services, VCF Automation, vCenter (incl. SSO username), switch profiles, LAG, port group load balancing and uplink order, NSX operational mode and teaming, SDDC Manager, auto-generated passwords.
+- **Deploy Workload Domain:** full deployment or infrastructure only, network pool create or re-use, static or DHCP pool networks, principal storage incl. vSAN Storage Cluster (vSAN Max), secondary storage network (NFS or vSAN storage client), FTT 1-3, NSX create or join, optional appliance IPs, VLAN transport zone, VPC options, VNA, TEP pool, uplink profile and teaming, vSphere Supervisor.
+- **Configure Management/Workload Domain - vSAN Stretched Cluster:** network pool create or re-use, AZ2 hosts, witness, AZ2 host overlay (IP pool or DHCP, new or existing pool).
+
 ## Not covered
 
-- Secondary instance (`VCF_EXTEND`), converting existing vCenter/NSX, VVF.
-- Dual-stack IPv6, multi-rack L3 clusters, vSAN Max / compute-only clusters, additional clusters.
-- Depot, proxy and download token (configured in the VCF Installer UI, not in the JSON).
+- Dual-stack (IPv6) networking: the installer JSON format for IPv6 networks is not documented in the 9.1.1 API reference.
+- Multi-rack Layer 3 clusters and Additional Racks, Deploy Cluster (additional clusters), Import Workload Domain / existing vCenter or NSX (nothing to import in a greenfield).
+- VVF, vVols, remote vSAN (compute-only) clusters.
+- Depot, proxy and download token (configured in the VCF Installer UI, not in the JSON). VCF Installer location has no effect on the JSON.
 
 ## Verify before production use
 
+- Workload domains write `vpcNetworkConfigurationType` only for infrastructure-only (shell) domains, as documented in the API; full domains use `overlayVtepSpec.vtepType = NO_IP` for VLAN backed VPC.
 - VLAN-backed VPC in the management domain is written as `vpcSpec.vpcNetworkConfigurationType = VLAN_BACKED_VPC` plus `overlayVtepSpec.vtepType = NO_IP`.
 - Stretching a cluster whose hosts have no TEPs (VCF 9.1.1 VLAN backed VPC only) sends no `networkSpec` or `secondaryAzOverlayVlanId`; both are optional in the API. Clusters with TEPs (all 9.0 / 9.1.0 management domains, Full Stack VPC) need the AZ2 overlay section.
 - Always run the validation API (or the installer pre-checks) before deploying.

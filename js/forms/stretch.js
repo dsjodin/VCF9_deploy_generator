@@ -8,14 +8,17 @@
   const pool = s => overlay(s) && s.tepMode === 'pool';
   const newPool = s => pool(s) && !s.tepReuse;
 
+  const createPool = s => s.poolMode !== 'reuse';
+
   function poolNet(p, title, o) {
+    const show = createPool;
     return [
-      { type: 'note', text: '<b>' + title + '</b>' },
-      { id: p + 'Vlan', label: 'VLAN ID', type: 'text', fmt: 'vlan', req: true, ph: o.vlan, help: 'AZ2 VLAN for this network. AZ2 normally uses different VLANs and subnets than AZ1 (L3 between sites).', api: 'networks[].vlanId' },
-      { id: p + 'Mtu', label: 'MTU', type: 'text', fmt: 'mtu', req: true, def: '9000', help: 'MTU for the network.', api: 'networks[].mtu' },
-      { id: p + 'Gw', label: 'Gateway (CIDR notation)', type: 'text', fmt: 'gwcidr', req: true, ph: o.gw, help: 'AZ2 gateway with prefix length.', api: 'networks[].gateway' },
-      { id: p + 'Start', label: 'IP range start', type: 'text', fmt: 'ipv4', req: true, ph: o.start, help: 'First address (one per AZ2 host).', api: 'networks[].ipPools[].start' },
-      { id: p + 'End', label: 'IP range end', type: 'text', fmt: 'ipv4', req: true, ph: o.end, help: 'Last address.', api: 'networks[].ipPools[].end' },
+      { type: 'note', text: '<b>' + title + '</b>', show },
+      { id: p + 'Vlan', label: 'VLAN ID', type: 'text', fmt: 'vlan', req: true, show, ph: o.vlan, help: 'AZ2 VLAN for this network. AZ2 normally uses different VLANs and subnets than AZ1 (L3 between sites).', api: 'networks[].vlanId' },
+      { id: p + 'Mtu', label: 'MTU', type: 'text', fmt: 'mtu', req: true, def: '9000', show, help: 'MTU for the network.', api: 'networks[].mtu' },
+      { id: p + 'Gw', label: 'Gateway (CIDR notation)', type: 'text', fmt: 'gwcidr', req: true, show, ph: o.gw, help: 'AZ2 gateway with prefix length.', api: 'networks[].gateway' },
+      { id: p + 'Start', label: 'IP range start', type: 'text', fmt: 'ipv4', req: true, show, ph: o.start, help: 'First address (one per AZ2 host).', api: 'networks[].ipPools[].start' },
+      { id: p + 'End', label: 'IP range end', type: 'text', fmt: 'ipv4', req: true, show, ph: o.end, help: 'Last address.', api: 'networks[].ipPools[].end' },
     ];
   }
 
@@ -223,6 +226,10 @@
       {
         id: 'pool', title: '1. AZ2 network pool',
         fields: [
+          { id: 'poolMode', label: 'VCF network pool', type: 'select', def: 'create', rerender: true, options: [
+            { v: 'create', l: 'Create a new VCF network pool', d: 'Generates the AZ2 network pool JSON (file 1).' },
+            { v: 'reuse', l: 'Re-use an existing VCF network pool', d: 'AZ2 hosts are commissioned into an existing pool; no network pool file is generated.' },
+          ], help: 'Workbook "VCF Network Pool Type".' },
           { id: 'poolName', label: 'Network pool name', type: 'text', rerender: true, auto: (s, g) => g('clusterName') ? g('clusterName') + '-az2-np01' : '', help: 'Name of the AZ2 network pool in SDDC Manager.', api: 'name' },
           ...poolNet('vmotion', 'vMotion (AZ2)', { vlan: '1212', gw: '10.12.12.1/24', start: '10.12.12.101', end: '10.12.12.116' }),
           ...poolNet('vsan', 'vSAN (AZ2)', { vlan: '1213', gw: '10.12.13.1/24', start: '10.12.13.101', end: '10.12.13.116' }),
@@ -279,18 +286,19 @@
     if (missing) out.push({ level: 'warn', field: 'hosts', msg: missing + ' AZ2 host(s) without SDDC Manager host ID; placeholders are written to the JSON' });
     if (!(s.clusterId || '').trim()) out.push({ level: 'info', field: 'clusterId', msg: 'Cluster ID is empty; replace {id} in PATCH /v1/clusters/{id} when submitting' });
     const n = hosts.length;
-    C.rangeRules(out, { label: 'AZ2 vMotion', gw: s.vmotionGw, start: s.vmotionStart, end: s.vmotionEnd, fieldStart: 'vmotionStart', fieldEnd: 'vmotionEnd', need: n, needMsg: 'needs one per AZ2 host (' + n + ')' });
-    C.rangeRules(out, { label: 'AZ2 vSAN', gw: s.vsanGw, start: s.vsanStart, end: s.vsanEnd, fieldStart: 'vsanStart', fieldEnd: 'vsanEnd', need: n, needMsg: 'needs one per AZ2 host (' + n + ')' });
+    if (createPool(s)) C.rangeRules(out, { label: 'AZ2 vMotion', gw: s.vmotionGw, start: s.vmotionStart, end: s.vmotionEnd, fieldStart: 'vmotionStart', fieldEnd: 'vmotionEnd', need: n, needMsg: 'needs one per AZ2 host (' + n + ')' });
+    if (createPool(s)) C.rangeRules(out, { label: 'AZ2 vSAN', gw: s.vsanGw, start: s.vsanStart, end: s.vsanEnd, fieldStart: 'vsanStart', fieldEnd: 'vsanEnd', need: n, needMsg: 'needs one per AZ2 host (' + n + ')' });
     if (newPool(s)) {
       const nsxUplinks = s.nics.filter(x => (x.vds || '').trim() === g('nsxVds')).length || 2;
       C.rangeRules(out, { label: 'AZ2 TEP pool', gw: s.tepGw, start: s.tepStart, end: s.tepEnd, fieldStart: 'tepStart', fieldEnd: 'tepEnd', need: n * nsxUplinks, needMsg: 'needs ' + n * nsxUplinks + ' (one per host uplink)' });
     }
     if (N.isCidr(s.witnessCidr) && N.isIPv4(s.witnessIp) && !N.inSubnet(s.witnessIp, s.witnessCidr)) out.push({ level: 'error', field: 'witnessIp', msg: 'Witness vSAN IP is not inside the witness vSAN subnet' });
+    const active = k => (k === 'tep' ? newPool(s) : createPool(s));
     for (const [a, b] of [['vmotion', 'vsan'], ['vmotion', 'tep'], ['vsan', 'tep']]) {
-      if ((a === 'tep' || b === 'tep') && !newPool(s)) continue;
+      if (!active(a) || !active(b)) continue;
       if (N.cidrsOverlap(s[a + 'Gw'], s[b + 'Gw'])) out.push({ level: 'error', field: b + 'Gw', msg: b + ' subnet overlaps ' + a });
     }
-    if (N.isCidr(s.witnessCidr) && N.cidrsOverlap(s.witnessCidr, s.vsanGw)) out.push({ level: 'error', field: 'witnessCidr', msg: 'Witness vSAN subnet must be routed, not the same as the AZ2 vSAN subnet' });
+    if (createPool(s) && N.isCidr(s.witnessCidr) && N.cidrsOverlap(s.witnessCidr, s.vsanGw)) out.push({ level: 'error', field: 'witnessCidr', msg: 'Witness vSAN subnet must be routed, not the same as the AZ2 vSAN subnet' });
     const seen = {};
     s.nics.forEach((x, i) => {
       if (x.id && seen[x.id]) out.push({ level: 'error', field: 'nics.' + i + '.id', msg: x.id + ' is mapped twice' });
@@ -307,7 +315,7 @@
   form.build = function (s, g) {
     const files = [];
     const base = (g('clusterName') || 'cluster') + '-stretch';
-    files.push({
+    if (createPool(s)) files.push({
       name: base + '-1-az2-network-pool.json', title: 'AZ2 network pool',
       json: { name: g('poolName'), networks: [poolNetwork(s, 'VMOTION', 'vmotion'), poolNetwork(s, 'VSAN', 'vsan')] },
       method: 'POST', endpoint: '/v1/network-pools', schema: { api: 'sddc-manager-api', type: 'NetworkPool' },
