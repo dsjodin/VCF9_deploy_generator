@@ -4,7 +4,8 @@
   const N = Net;
   const HOST_ID_PH = '<--ENTER-SDDC-HOST-ID-->';
   const POOL_ID_PH = '<--ENTER-NETWORK-POOL-ID-->';
-  const pool = s => s.tepMode === 'pool';
+  const overlay = s => s.nsxNet === 'overlay';
+  const pool = s => overlay(s) && s.tepMode === 'pool';
   const newPool = s => pool(s) && !s.tepReuse;
 
   function poolNet(p, title, o) {
@@ -50,9 +51,9 @@
     const l = login(g);
     return {
       title: 'Get cluster ID, vSAN type and NSX switch from SDDC Manager',
-      note: 'Run the login line once per shell, then the query. Paste the output below to fill <b>Cluster ID</b>, <b>vSAN architecture</b> and <b>NSX distributed switch</b>.',
-      bash: [l.bash, get('/v1/clusters') + " | jq -r '.elements[] | " + sel + '"name=\\(.name) id=\\(.id) type=\\(.primaryDatastoreType) stretched=\\(.isStretched) nsxVds=\\([.vdsSpecs[]? | select(.nsxtSwitchConfig != null) | .name] | join(","))"\''],
-      pwsh: [l.pwsh, '(Invoke-VcfGetClusters).Elements | ' + where + 'ForEach-Object { "name=$($_.Name) id=$($_.Id) type=$($_.PrimaryDatastoreType) stretched=$($_.IsStretched) nsxVds=$((@($_.VdsSpecs | Where-Object NsxtSwitchConfig).Name) -join \',\')" }'],
+      note: 'Run the login line once per shell, then the query. Paste the output below to fill <b>Cluster ID</b>, <b>vSAN architecture</b>, <b>NSX networking</b> (overlay or VLAN-backed) and <b>NSX distributed switch</b>.',
+      bash: [l.bash, get('/v1/clusters') + " | jq -r '.elements[] | " + sel + '"name=\\(.name) id=\\(.id) type=\\(.primaryDatastoreType) stretched=\\(.isStretched) nsxVds=\\([.vdsSpecs[]? | select(.nsxtSwitchConfig != null) | .name] | join(",")) overlay=\\([.vdsSpecs[]?.nsxtSwitchConfig.transportZones[]?.transportType] | index("OVERLAY") != null)"\''],
+      pwsh: [l.pwsh, '(Invoke-VcfGetClusters).Elements | ' + where + 'ForEach-Object { "name=$($_.Name) id=$($_.Id) type=$($_.PrimaryDatastoreType) stretched=$($_.IsStretched) nsxVds=$((@($_.VdsSpecs | Where-Object NsxtSwitchConfig).Name) -join \',\') overlay=$([bool](@($_.VdsSpecs.NsxtSwitchConfig.TransportZones) | Where-Object TransportType -eq \'OVERLAY\'))" }'],
       apply: (text, st) => {
         const rows = kv(text);
         const r = rows.find(o => o.name && o.name === st.clusterName) || rows[0];
@@ -62,6 +63,7 @@
         if (r.type === 'VSAN_ESA') st.vsanType = 'vsan-esa';
         else if (r.type === 'VSAN') st.vsanType = 'vsan-osa';
         if (r.nsxVds) st.nsxVds = r.nsxVds.split(',')[0];
+        if (r.overlay) st.nsxNet = r.overlay.toLowerCase() === 'true' ? 'overlay' : 'vlan';
         if (r.stretched === 'true') alert('SDDC Manager reports this cluster as already stretched.');
         return true;
       },
@@ -200,7 +202,11 @@
           { id: 'clusterName', label: 'Cluster name', type: 'text', req: true, rerender: true, ph: 'sfo-m01-cl01', help: 'Name of the vSAN cluster to stretch (used for file names and documentation).' },
           { id: 'clusterId', label: 'SDDC Manager cluster ID', type: 'text', help: 'UUID of the cluster from <code>GET /v1/clusters</code>. Used in the API path <code>PATCH /v1/clusters/{id}</code>. Not part of the JSON body.', lookup: clusterLookup },
           { id: 'vsanType', label: 'vSAN architecture', type: 'select', def: 'vsan-esa', options: C.storage.slice(0, 2), help: 'Architecture of the existing cluster. Determines the commissioning storage type. Filled by the cluster ID lookup.' },
-          { id: 'edgeMultiAz', label: 'Edge cluster is configured for multi-AZ', type: 'checkbox', def: true, help: 'Acknowledge that the NSX Edge cluster networking (uplink VLANs, BGP to AZ2 top-of-rack, route maps) is prepared to work after a site failover.', api: 'clusterStretchSpec.isEdgeClusterConfiguredForMultiAZ' },
+          { id: 'nsxNet', label: 'NSX networking of the cluster', type: 'select', def: 'overlay', rerender: true, options: [
+            { v: 'overlay', l: 'NSX overlay (host TEPs)', d: 'Typical for workload domain clusters. AZ2 hosts need TEPs: an AZ2 host overlay VLAN and IP pool (section 3), and the Edge cluster must be prepared for multi-AZ.' },
+            { v: 'vlan', l: 'VLAN-backed only (no host TEPs)', d: 'Typical for the management domain in VCF 9 (VLAN-backed segments / VLAN-backed VPC). No AZ2 overlay configuration and no Edge multi-AZ acknowledgement are sent.' },
+          ], help: 'Whether the cluster hosts carry NSX overlay (TEP) traffic. Filled by the cluster ID lookup (overlay transport zone present or not).' },
+          { id: 'edgeMultiAz', label: 'Edge cluster is configured for multi-AZ', type: 'checkbox', def: true, show: overlay, help: 'Only relevant with NSX overlay and an Edge cluster. Acknowledge that the Edge cluster networking (uplink VLANs, BGP to AZ2 top-of-rack, route maps) is prepared to work after a site failover.', api: 'clusterStretchSpec.isEdgeClusterConfiguredForMultiAZ' },
           { id: 'noLicense', label: 'Deploy without license keys', type: 'checkbox', def: true, help: 'VCF 9 licenses through VCF Operations.', api: 'clusterStretchSpec.deployWithoutLicenseKeys' },
         ],
       },
@@ -247,7 +253,7 @@
         ],
       },
       {
-        id: 'overlay', title: '3. AZ2 host overlay (NSX TEP)',
+        id: 'overlay', title: '3. AZ2 host overlay (NSX TEP)', show: overlay,
         fields: [
           { id: 'tepVlan', label: 'AZ2 host overlay VLAN', type: 'text', fmt: 'vlan', req: true, ph: '1214', help: 'VLAN for AZ2 host TEPs.', api: P + '.uplinkProfiles[].transportVlan' },
           { id: 'tepMode', label: 'TEP IP assignment', type: 'select', options: C.tepMode, def: 'pool', rerender: true, help: 'How AZ2 TEPs get IPs.' },
@@ -325,9 +331,9 @@
       hostSpecs: hostRows.map(h => ({ id: (h.id || '').trim() || HOST_ID_PH, hostName: h.fqdn.trim(), hostNetworkSpec })),
       witnessSpec: { fqdn: g('witnessFqdn'), vsanIp: g('witnessIp'), vsanCidr: g('witnessCidr') },
       witnessTrafficSharedWithVsanTraffic: !!s.witnessShared,
-      isEdgeClusterConfiguredForMultiAZ: !!s.edgeMultiAz,
       deployWithoutLicenseKeys: !!s.noLicense,
     };
+    if (overlay(s)) spec.isEdgeClusterConfiguredForMultiAZ = !!s.edgeMultiAz;
     if (pool(s)) {
       const nsxVds = g('nsxVds');
       const up = vmNics.filter(x => x.vdsName === nsxVds).map(x => x.uplink);
@@ -345,14 +351,14 @@
         nsxClusterSpec: { ipAddressPoolsSpec: [ipPool], uplinkProfiles: [{ name: g('uplinkProfile'), transportVlan: C.int(s.tepVlan), teamings: [teaming] }] },
         networkProfiles: [{ name: g('netProfile'), nsxtHostSwitchConfigs: [{ vdsName: nsxVds, uplinkProfileName: g('uplinkProfile'), ipAddressPoolName: g('tepPoolName'), vdsUplinkToNsxUplink: map }] }],
       };
-    } else {
+    } else if (overlay(s)) {
       spec.secondaryAzOverlayVlanId = C.int(s.tepVlan);
     }
     const id = (s.clusterId || '').trim() || '{id}';
     files.push({
       name: base + '-3-cluster-stretch.json', title: 'Cluster stretch spec', main: true, json: { clusterStretchSpec: spec },
       method: 'PATCH', endpoint: '/v1/clusters/' + id + '  (validate first: POST /v1/clusters/' + id + '/validations)',
-      note: 'After stretching, configure NSX Tier-0 for AZ2 (IP prefixes, route maps, BGP neighbors) as described in the workbook.',
+      note: s.nsxNet === 'overlay' ? 'After stretching, configure NSX Tier-0 for AZ2 (IP prefixes, route maps, BGP neighbors) as described in the workbook.' : 'VLAN-backed cluster: no AZ2 TEP configuration is sent. Make sure the VLAN-backed segments / VLANs are available in AZ2.',
       schema: { api: 'sddc-manager-api', type: 'ClusterUpdateSpec' },
     });
     return files;
@@ -370,6 +376,7 @@
     s.witnessFqdn = str(w.fqdn); s.witnessIp = str(w.vsanIp); s.witnessCidr = str(w.vsanCidr);
     s.witnessShared = !!sp.witnessTrafficSharedWithVsanTraffic;
     s.edgeMultiAz = sp.isEdgeClusterConfiguredForMultiAZ !== false;
+    s.nsxNet = sp.networkSpec || sp.secondaryAzOverlayVlanId !== undefined || sp.isEdgeClusterConfiguredForMultiAZ !== undefined ? 'overlay' : 'vlan';
     s.noLicense = sp.deployWithoutLicenseKeys !== false;
     const hs = sp.hostSpecs || [];
     s.hosts = hs.map(h => ({ fqdn: str(h.hostName || h.hostname), id: str(h.id).indexOf('<--') === 0 ? '' : str(h.id) }));
@@ -397,7 +404,7 @@
       const np = (ns.networkProfiles || [])[0] || {};
       s.netProfile = str(np.name);
       s.nsxVds = str(((np.nsxtHostSwitchConfigs || [])[0] || {}).vdsName);
-    } else {
+    } else if (s.nsxNet === 'overlay') {
       s.tepMode = 'dhcp';
       s.tepVlan = str(sp.secondaryAzOverlayVlanId);
     }

@@ -77,4 +77,5 @@ Three layers, shown in the Issues tab and next to each field:
 ## Verify before production use
 
 - VLAN-backed VPC in the management domain is written as `vpcSpec.vpcNetworkConfigurationType = VLAN_BACKED_VPC` plus `overlayVtepSpec.vtepType = NO_IP`.
+- Stretching a VLAN-backed cluster (no host TEPs, typical for the management domain) sends no `networkSpec`, `secondaryAzOverlayVlanId` or `isEdgeClusterConfiguredForMultiAZ`; these are optional in the API.
 - Always run the validation API (or the installer pre-checks) before deploying.
