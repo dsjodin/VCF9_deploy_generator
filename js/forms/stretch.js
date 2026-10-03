@@ -359,7 +359,11 @@
     files.push({
       name: base + '-3-cluster-stretch.json', title: 'Cluster stretch spec', main: true, json: { clusterStretchSpec: spec },
       method: 'PATCH', endpoint: '/v1/clusters/' + id + '  (validate first: POST /v1/clusters/' + id + '/validations)',
-      note: s.nsxNet === 'overlay' ? 'After stretching, configure NSX Tier-0 for AZ2 (IP prefixes, route maps, BGP neighbors) as described in the workbook.' : 'VLAN-backed cluster: no AZ2 TEP configuration is sent. Make sure the VLAN-backed segments / VLANs are available in AZ2.',
+      note: [
+        s.nsxNet === 'overlay' ? 'AZ2 hosts get TEPs from the AZ2 uplink profile and IP pool in this spec.' : 'Hosts without TEPs: no AZ2 TEP configuration is sent.',
+        s.edgeMultiAz ? 'After stretching, configure the NSX Tier-0 for AZ2 (IP prefixes, route maps, BGP neighbors) as described in the workbook.' : 'No Edge cluster acknowledged: no Tier-0 / BGP changes are needed for this stretch.',
+        'Make sure the VLAN-backed segments / VLANs used by the cluster also exist in AZ2.',
+      ].join(' '),
       schema: { api: 'sddc-manager-api', type: 'ClusterUpdateSpec' },
     });
     return files;
