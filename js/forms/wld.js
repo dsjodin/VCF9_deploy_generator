@@ -251,7 +251,8 @@
       const pool = s => on(s) && s.tepMode === 'pool';
       const range = s => pool(s) && !s[x + 'tepReuse'];
       return [
-        { id: x + 'tepVlan', label: 'Host overlay VLAN ID', type: 'text', fmt: 'vlan', req: true, ph: o.vlan, show: on, help: 'VLAN for host TEPs (transport VLAN of the uplink profile).', api: NSXP + '.uplinkProfiles[].transportVlan' },
+        Object.assign({ id: x + 'tepVlan', label: 'Host overlay VLAN ID', type: 'text', fmt: 'vlan', req: true, ph: o.vlan, show: on, help: 'VLAN for host TEPs (transport VLAN of the uplink profile).', api: NSXP + '.uplinkProfiles[].transportVlan' },
+          CL && r === 1 ? { auto: () => C.from('wld', 'tepVlan'), help: 'VLAN for host TEPs (transport VLAN of the uplink profile). Empty: the host overlay VLAN from the Workload Domain tab (clusters in the same rack normally share it).' } : {}),
         { id: x + 'tepPoolName', label: 'IP pool name', type: 'text', show: pool, auto: clAuto(rackSfx(r) + '-tep01'), pattern: '^[a-zA-Z0-9-_]+$', patternMsg: 'Letters, digits, - and _ only', help: 'Name of the NSX TEP IP pool. To reuse an existing pool, enter its name and tick "Re-use an existing IP pool".', api: NSXP + '.ipAddressPoolsSpec[].name' },
         { id: x + 'tepGw', label: 'Gateway (CIDR notation)', type: 'text', fmt: 'gwcidr', req: range, show: range, ph: o.gw, help: 'TEP subnet gateway with prefix.', api: NSXP + '.ipAddressPoolsSpec[].subnets[].gateway' },
         { id: x + 'tepStart', label: 'IP pool start', type: 'text', fmt: 'ipv4', req: range, show: range, ph: o.start, help: 'First TEP address.', api: NSXP + '.ipAddressPoolsSpec[].subnets[].ipAddressPoolRanges[].start' },
@@ -277,10 +278,11 @@
 
     const nsxMode = { id: 'nsxMode', label: 'Host switch operational mode', type: 'select', options: C.nsxMode, def: 'default', show: full, help: 'NSX datapath mode on the hosts.', api: API + '.nsxtSwitchConfig.hostSwitchOperationalMode' };
     const overlayTz = CL
-      ? { id: 'overlayTz', label: 'Overlay transport zone name', type: 'text', req: true, show: fullStack, ph: 'overlay-tz-sfo-w01-nsx01', help: 'Existing overlay transport zone of the workload domain NSX instance.', api: API + '.nsxtSwitchConfig.transportZones[].name', lookup: tzLookup }
+      ? { id: 'overlayTz', label: 'Overlay transport zone name', type: 'text', req: true, show: fullStack, ph: 'overlay-tz-sfo-w01-nsx01', auto: () => C.from('wld', 'overlayTz'), help: 'Existing overlay transport zone of the workload domain NSX instance. Empty: taken from the Workload Domain tab.', api: API + '.nsxtSwitchConfig.transportZones[].name', lookup: tzLookup }
       : { id: 'overlayTz', label: 'Overlay transport zone name', type: 'text', show: s => full(s) && fullStack(s), auto: (s, g) => g('nsxVip') ? 'overlay-tz-' + N.shortName(g('nsxVip')) : '', help: 'NSX overlay transport zone.', api: API + '.nsxtSwitchConfig.transportZones[].name' };
     const vlanTzOn = { id: 'vlanTzOn', label: 'Transport zone type: NSX-VLAN', type: 'checkbox', def: !CL, rerender: true, show: full, help: 'Workbook "Transport Zone Type: NSX-VLAN". Attach a VLAN transport zone to the NSX switch (needed for VLAN-backed segments, Edge uplinks).' };
-    const vlanTz = Object.assign({ id: 'vlanTz', label: 'VLAN transport zone name', type: 'text', def: 'nsx-vlan-transportzone-0', show: s => full(s) && s.vlanTzOn, help: 'NSX VLAN transport zone.', api: API + '.nsxtSwitchConfig.transportZones[].name' }, CL ? { lookup: tzLookup } : {});
+    const vlanTz = Object.assign({ id: 'vlanTz', label: 'VLAN transport zone name', type: 'text', def: 'nsx-vlan-transportzone-0', show: s => full(s) && s.vlanTzOn, help: 'NSX VLAN transport zone.', api: API + '.nsxtSwitchConfig.transportZones[].name' },
+      CL ? { def: undefined, auto: () => C.from('wld', 'vlanTz') || 'nsx-vlan-transportzone-0', help: 'NSX VLAN transport zone. Empty: taken from the Workload Domain tab.', lookup: tzLookup } : {});
     const vpcType = { id: 'vpcType', label: 'VPC network configuration', type: 'select', options: C.vpcType, def: 'full', rerender: true,
       help: CL ? 'VPC network configuration of the workload domain NSX instance. It decides whether the hosts get TEPs: Full Stack VPC = TEPs (host overlay section), VLAN backed VPC (9.1.1) = no TEPs.' : 'NSX VPC model.',
       api: CL ? NSXP + '.overlayVtepSpec' : 'nsxTSpec.vpcSpec.vpcNetworkConfigurationType' };
@@ -290,14 +292,14 @@
 
     const sections = [
       C.lookup.section(null, CL ? [
-        { id: 'vcFqdn', label: 'vCenter FQDN (vSAN storage cluster)', type: 'text', fmt: 'fqdn', rerender: true, show: compute, ph: 'sfo-w01-vc01.sfo.rainpole.io', help: 'vCenter of the vSAN storage cluster whose datastore is mounted. Used for the datastore UUID lookup.' },
-        { id: 'nsxFqdn', label: 'NSX Manager FQDN', type: 'text', fmt: 'fqdn', rerender: true, ph: 'sfo-w01-nsx01.sfo.rainpole.io', help: 'NSX Manager (VIP) of the workload domain. Used for the transport zone lookup.' },
+        { id: 'vcFqdn', label: 'vCenter FQDN (vSAN storage cluster)', type: 'text', fmt: 'fqdn', rerender: true, show: compute, ph: 'sfo-w01-vc01.sfo.rainpole.io', auto: () => C.from('wld', 'vcFqdn'), help: 'vCenter of the vSAN storage cluster whose datastore is mounted. Used for the datastore UUID lookup. Empty: the vCenter from the Workload Domain tab.' },
+        { id: 'nsxFqdn', label: 'NSX Manager FQDN', type: 'text', fmt: 'fqdn', rerender: true, ph: 'sfo-w01-nsx01.sfo.rainpole.io', auto: () => C.from('wld', 'nsxVip'), help: 'NSX Manager (VIP) of the workload domain. Used for the transport zone lookup. Empty: the NSX VIP from the Workload Domain tab.' },
       ] : []),
       {
         id: 'general', title: 'General',
         fields: [
           CL
-            ? { id: 'domainName', label: 'Workload domain name', type: 'text', req: true, ph: 'sfo-w01', rerender: true, help: 'Existing workload domain the cluster is added to. Used for the domain ID lookup and generated names; not part of the JSON.' }
+            ? { id: 'domainName', label: 'Workload domain name', type: 'text', req: true, ph: 'sfo-w01', rerender: true, auto: () => C.from('wld', 'domainName'), help: 'Existing workload domain the cluster is added to. Used for the domain ID lookup and generated names; not part of the JSON. Empty: taken from the Workload Domain tab.' }
             : { id: 'domainName', label: 'Workload domain name', type: 'text', req: true, ph: 'sfo-w01', pattern: '^[a-zA-Z0-9-]{3,20}$', patternMsg: '3-20 characters: letters, digits and hyphens', help: 'Name of the workload domain in SDDC Manager.', api: 'domainName' },
           CL
             ? { id: 'domainId', label: 'Workload domain ID', type: 'text', check: uuidCheck, help: 'ID of the workload domain from <code>GET /v1/domains</code>. Leave empty to keep a placeholder.', api: 'domainId', lookup: domainLookup }
@@ -460,8 +462,8 @@
           { id: 'supUseMgmt', label: 'Use ESX management VMkernel settings', type: 'checkbox', def: false, rerender: true, help: 'Put the control plane on the host management network instead of a separate VLAN.' },
           { id: 'supVlan', label: 'Management VLAN', type: 'text', fmt: 'vlan', req: true, show: s => !s.supUseMgmt, ph: '1310', help: 'VLAN of the Supervisor management network.', api: 'computeSpec.clusterSpecs[].supervisorActivationSpec.managementNetwork.details.vlanId' },
           { id: 'supGw', label: 'Management gateway CIDR', type: 'text', fmt: 'gwcidr', req: true, show: s => !s.supUseMgmt, ph: '10.13.10.1/24', help: 'Gateway with prefix of the Supervisor management network.', api: ['computeSpec.clusterSpecs[].supervisorActivationSpec.managementNetwork.details.gateway', 'computeSpec.clusterSpecs[].supervisorActivationSpec.managementNetwork.details.netMask'] },
-          { id: 'supDns', label: 'Workload DNS servers', type: 'text', req: true, fmt: 'ipv4', list: true, ph: '10.11.10.4,10.11.10.5', help: 'Comma separated DNS servers.', api: 'computeSpec.clusterSpecs[].supervisorActivationSpec.vpcNetwork.dnsServers' },
-          { id: 'supNtp', label: 'Workload NTP servers', type: 'text', req: true, fmt: 'ipOrFqdn', list: true, ph: 'ntp0.sfo.rainpole.io,ntp1.sfo.rainpole.io', help: 'Comma separated NTP servers.', api: 'computeSpec.clusterSpecs[].supervisorActivationSpec.vpcNetwork.ntpServers' },
+          { id: 'supDns', label: 'Workload DNS servers', type: 'text', req: true, fmt: 'ipv4', list: true, ph: '10.11.10.4,10.11.10.5', auto: () => [C.from('mgmt', 'dns1'), C.from('mgmt', 'dns2')].filter(Boolean).join(','), help: 'Comma separated DNS servers. Empty: the DNS servers from the Management Domain tab.', api: 'computeSpec.clusterSpecs[].supervisorActivationSpec.vpcNetwork.dnsServers' },
+          { id: 'supNtp', label: 'Workload NTP servers', type: 'text', req: true, fmt: 'ipOrFqdn', list: true, ph: 'ntp0.sfo.rainpole.io,ntp1.sfo.rainpole.io', auto: () => [C.from('mgmt', 'ntp1'), C.from('mgmt', 'ntp2')].filter(Boolean).join(','), help: 'Comma separated NTP servers. Empty: the NTP servers from the Management Domain tab.', api: 'computeSpec.clusterSpecs[].supervisorActivationSpec.vpcNetwork.ntpServers' },
           { id: 'supPrivCidr', label: 'Private (transit gateway) CIDR', type: 'text', fmt: 'netcidr', def: '172.30.0.0/16', show: distributed, help: 'Private CIDR for VPCs when using distributed connectivity.', api: 'computeSpec.clusterSpecs[].supervisorActivationSpec.vpcNetwork.privateCidr' },
           { id: 'nsxProject', label: 'NSX project path', type: 'text', help: 'Optional. Only when using an existing NSX instance.', api: 'computeSpec.clusterSpecs[].supervisorActivationSpec.vpcNetwork.nsxProject' },
           { id: 'vpcProfile', label: 'VPC connectivity profile', type: 'text', help: 'Optional. Only when using an existing NSX instance.', api: 'computeSpec.clusterSpecs[].supervisorActivationSpec.vpcNetwork.nsxVpcConnectivityProfile' },
@@ -503,7 +505,7 @@
       }
       if (!CL && distributed(s)) own.push(['dtgw', 'DTGW', true]);
       for (const [k, label, hasGw] of own) {
-        const v = String(s[k + 'Vlan'] || '').trim();
+        const v = String(g(k + 'Vlan') || '').trim();
         const m = v && v !== '0' && mn.find(n => n.vlan === v);
         if (m) out.push({ level: 'warn', field: k + 'Vlan', msg: label + ' VLAN ' + v + ' is the management domain ' + m.label + ' VLAN (Management Domain tab); use a VLAN of its own for the workload domain' });
         const c = hasGw && N.isCidr(s[k + 'Gw']) ? s[k + 'Gw'] : null;
@@ -685,7 +687,7 @@
         const teaming = lag
           ? { policy: 'FAILOVER_ORDER', activeUplinks: [lag], standByUplinks: [] }
           : { policy: s.nsxTeam, activeUplinks: up.filter((_, n) => st(n) === 'Active'), standByUplinks: up.filter((_, n) => st(n) === 'Standby') };
-        const tcs = { uplinkProfiles: racks.map(r => ({ name: g(rp(r) + 'uplinkProfile'), transportVlan: C.int(s[rp(r) + 'tepVlan']), teamings: [teaming] })) };
+        const tcs = { uplinkProfiles: racks.map(r => ({ name: g(rp(r) + 'uplinkProfile'), transportVlan: C.int(g(rp(r) + 'tepVlan')), teamings: [teaming] })) };
         if (s.tepMode === 'pool') {
           tcs.ipAddressPoolsSpec = racks.map(r => {
             const x = rp(r);
@@ -747,7 +749,7 @@
           zoneName: g('zoneName'),
           serviceCidr: cidr ? { address: cidr.network, prefix: cidr.prefix } : null,
           managementNetwork: { controlPlaneIpRange: { startIpAddress: s.cpStart, endIpAddress: s.cpEnd } },
-          vpcNetwork: { dnsServers: C.list(s.supDns), ntpServers: C.list(s.supNtp) },
+          vpcNetwork: { dnsServers: C.list(g('supDns')), ntpServers: C.list(g('supNtp')) },
         };
         if (!s.supUseMgmt) {
           const c = N.parseCidr(s.supGw);

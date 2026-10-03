@@ -124,13 +124,13 @@
     schema: { api: 'sddc-manager-api', root: 'ClusterUpdateSpec' },
     sections: [
       C.lookup.section(null, [
-        { id: 'vcFqdn', label: 'vCenter FQDN', type: 'text', fmt: 'fqdn', rerender: true, ph: 'sfo-m01-vc01.sfo.rainpole.io', help: 'vCenter of the cluster (and where the witness host is registered). Used for the NIC mapping and witness lookups.' },
-        { id: 'nsxFqdn', label: 'NSX Manager VIP FQDN', type: 'text', fmt: 'fqdn', rerender: true, ph: 'sfo-m01-nsx01.sfo.rainpole.io', help: 'NSX Manager of the cluster\'s domain. Used to list existing IP pools.' },
+        { id: 'vcFqdn', label: 'vCenter FQDN', type: 'text', fmt: 'fqdn', rerender: true, ph: 'sfo-m01-vc01.sfo.rainpole.io', auto: () => C.from('mgmt', 'vcFqdn'), help: 'vCenter of the cluster (and where the witness host is registered). Used for the NIC mapping and witness lookups. Empty: the management vCenter from the Management Domain tab; enter the workload domain vCenter when stretching a workload domain cluster.' },
+        { id: 'nsxFqdn', label: 'NSX Manager VIP FQDN', type: 'text', fmt: 'fqdn', rerender: true, ph: 'sfo-m01-nsx01.sfo.rainpole.io', auto: () => C.from('mgmt', 'nsxVip'), help: 'NSX Manager of the cluster\'s domain. Used to list existing IP pools. Empty: the management NSX VIP from the Management Domain tab.' },
       ]),
       {
         id: 'target', title: 'Target cluster',
         fields: [
-          { id: 'clusterName', label: 'Cluster name', type: 'text', req: true, rerender: true, ph: 'sfo-m01-cl01', help: 'Name of the vSAN cluster to stretch (used for file names and documentation).' },
+          { id: 'clusterName', label: 'Cluster name', type: 'text', req: true, rerender: true, ph: 'sfo-m01-cl01', auto: () => C.from('mgmt', 'clusterName'), help: 'Name of the vSAN cluster to stretch (used for file names and documentation). Empty: the management cluster from the Management Domain tab.' },
           { id: 'clusterId', label: 'SDDC Manager cluster ID', type: 'text', help: 'UUID of the cluster from <code>GET /v1/clusters</code>. Used in the API path <code>PATCH /v1/clusters/{id}</code>. Not part of the JSON body.', lookup: clusterLookup },
           { id: 'vsanType', label: 'vSAN architecture', type: 'select', def: 'vsan-esa', options: C.storage.slice(0, 2), help: 'Architecture of the existing cluster. Determines the commissioning storage type. Filled by the cluster ID lookup.' },
           { id: 'nsxNet', label: 'NSX networking of the cluster', type: 'select', def: 'overlay', rerender: true, options: [

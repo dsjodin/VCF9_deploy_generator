@@ -177,6 +177,14 @@
     ];
   };
 
+  // Value of a field on another tab: what was typed there, or that field's own auto value.
+  C.from = function (formId, id) {
+    const f = App.forms[formId], s = App.states && App.states[formId];
+    if (!f || !s) return '';
+    const v = App.makeGetter(f, s)(id);
+    return typeof v === 'string' ? v.trim() : '';
+  };
+
   // ---------- "Get from VCF" lookup commands shared by the Day-N forms ----------
   const L = C.lookup = {};
   const q = v => String(v || '').replace(/["'`$\\]/g, '').trim();
@@ -257,8 +265,8 @@
     id: 'connect', title: 'Lookup command settings',
     intro: intro || 'Optional. This page never connects to VCF. These values are only inserted into the "Get from VCF" commands, which you copy and run yourself in your own shell; paste the output back to fill the form. Not written to the JSON. Commands need <code>curl</code> and <code>jq</code> (bash) or VCF PowerCLI 9.',
     fields: [
-      { id: 'sddcFqdn', label: 'SDDC Manager FQDN', type: 'text', fmt: 'fqdn', rerender: true, ph: 'sfo-vcf01.sfo.rainpole.io', help: 'SDDC Manager of the VCF instance.' },
-      { id: 'sddcUser', label: 'SDDC Manager user', type: 'text', def: 'administrator@vsphere.local', rerender: true, help: 'User for the API token / PowerCLI connection. The password is prompted when you run the command, never stored here.' },
+      { id: 'sddcFqdn', label: 'SDDC Manager FQDN', type: 'text', fmt: 'fqdn', rerender: true, ph: 'sfo-vcf01.sfo.rainpole.io', auto: () => C.from('mgmt', 'sddcFqdn'), help: 'SDDC Manager of the VCF instance. Empty: taken from the Management Domain tab.' },
+      { id: 'sddcUser', label: 'SDDC Manager user', type: 'text', rerender: true, auto: () => C.from('mgmt', 'ssoUser') || 'administrator@vsphere.local', help: 'User for the API token / PowerCLI connection. Empty: the SSO administrator from the Management Domain tab. The password is prompted when you run the command, never stored here.' },
     ].concat(extra || []),
   });
 

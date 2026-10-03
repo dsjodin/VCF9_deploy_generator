@@ -48,6 +48,7 @@ Passwords are prompted when the command runs and are never stored in the form. P
 ## Using the form
 
 - Grey text in a field is either the workbook sample (`e.g. ...`) or the value that will be generated if you leave it empty (`Auto: ...`).
+- Values already entered on an earlier tab are reused as `Auto:` defaults: SDDC Manager FQDN and user, DNS / NTP servers (Supervisor) and the management vCenter, NSX VIP and cluster (Stretch) from the Management Domain tab; domain name, NSX VIP, vCenter, transport zones and host overlay VLAN (Deploy Cluster) from the Workload Domain tab. Type a value to override.
 - Click a field or its `?` button: the Help panel explains the field, every drop-down alternative, the JSON property it maps to and the official API description.
 - **Load sample** fills the current tab with the workbook sample values.
 - State is autosaved in the browser (localStorage). **Save project** writes all tabs to one file, including choices that are not part of the JSON; load it again with **Open / validate JSON**.
