@@ -107,6 +107,7 @@ code { background: var(--code); padding: 0 4px; border-radius: 3px; font-size: 1
 .field.wide, .note { grid-column: 1 / -1; }
 .note { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border); }
 .note.info { border: 1px solid var(--border); background: var(--accent-soft); border-radius: 6px; padding: 8px 10px; }
+.note.warn { border: 1px solid var(--warn); background: var(--warn-soft); border-radius: 6px; padding: 8px 10px; }
 .lbl { display: flex; align-items: center; gap: 6px; }
 .lbl label { font-weight: 600; font-size: 13px; }
 .help-btn {

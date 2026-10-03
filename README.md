@@ -57,7 +57,7 @@ Passwords are prompted when the command runs and are never stored in the form. P
 Three layers, shown in the Issues tab and next to each field:
 
 1. Field rules: required values, FQDN/IP/CIDR/VLAN/MTU formats, password rules from the API documentation.
-2. Network and dependency rules: gateways and ranges inside their subnet, range sizes against host count, overlapping subnets, duplicate FQDNs and NICs, MTU against switch MTU, deployment-model rules (VCF Automation and management services ranges, HA vs Simple), vSAN host minimums.
+2. Network and dependency rules: gateways and ranges inside their subnet, range sizes against host count, overlapping subnets, workload domain / cluster VLANs or subnets that are already used by the management domain (compared with the Management Domain tab), duplicate FQDNs and NICs, MTU against switch MTU, deployment-model rules (VCF Automation and management services ranges, HA vs Simple), vSAN host minimums.
 3. Schema check of the generated JSON against the official 9.1.1 API data structures (`js/schema.js`).
 
 ## Open existing JSON

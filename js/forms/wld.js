@@ -121,6 +121,20 @@
     return rows.join('<br>');
   }
 
+  // Networks entered on the Management Domain tab that have a VLAN or subnet
+  function mgmtNets() {
+    const f = App.forms.mgmt, s = App.states && App.states.mgmt;
+    if (!f || !f.networks || !s) return [];
+    return f.networks(s).map(n => ({ label: n.label, vlan: String(n.vlan || '').trim(), cidr: N.isCidr(n.gw) ? N.parseCidr(n.gw) : null }))
+      .filter(n => (n.vlan && n.vlan !== '0') || n.cidr);
+  }
+
+  function mgmtNote() {
+    const list = mgmtNets().map(n => n.label + ': ' + [n.vlan ? 'VLAN ' + n.vlan : '', n.cidr ? n.cidr.network + '/' + n.cidr.prefix : ''].filter(Boolean).join(', '));
+    return '<b>Use VLANs and subnets of their own for the workload domain, not those of the management domain.</b> This applies to vMotion, vSAN, NFS and host overlay (TEP) below, and to the ESX management network the hosts are on. Workbook example: management domain 11xx / 10.11.x.0, workload domain sfo-w01 13xx / 10.13.x.0.' +
+      (list.length ? '<br>Management Domain tab uses: ' + list.join('; ') + '.' : '');
+  }
+
   // ---------- "Get from VCF" lookups ----------
   const domainLookup = (s, g) => {
     const name = val(g, 'domainName', '<domain-name>');
@@ -310,7 +324,7 @@
       {
         id: 'pool', title: 'Network pool', num: true, show: full,
         intro: s => (l3(s) ? '<b>Rack 1.</b> ' : '') + 'vMotion and storage IP pools for the hosts. Created in SDDC Manager before commissioning the hosts.',
-        fields: poolFields(1),
+        fields: [{ type: 'note', kind: 'warn', text: mgmtNote }].concat(poolFields(1)),
       },
       {
         id: 'hosts', title: 'Hosts', num: true, show: full,
@@ -477,6 +491,25 @@
     form.rules = function (s, g) {
       const out = [];
       if (!CL && s.nsxInstance === 'join') out.push({ level: 'info', field: 'nsxInstance', msg: 'Joining an existing NSX instance: the NSX values must be those of the existing instance' });
+      // same VLAN or subnet as the management domain (Management Domain tab)
+      const mn = mgmtNets();
+      const own = [];
+      for (const r of racksOf(s)) {
+        const x = rp(r);
+        if (createPool(s, r)) {
+          for (const [k, label, , on] of POOLNETS) if (on(s)) own.push([x + k, label + (l3(s) ? ' (rack ' + r + ')' : ''), s[x + k + 'Mode'] !== 'dhcp']);
+        }
+        if (full(s) && fullStack(s)) own.push([x + 'tep', 'Host overlay' + (l3(s) ? ' (rack ' + r + ')' : ''), s.tepMode === 'pool' && !s[x + 'tepReuse']]);
+      }
+      if (!CL && distributed(s)) own.push(['dtgw', 'DTGW', true]);
+      for (const [k, label, hasGw] of own) {
+        const v = String(s[k + 'Vlan'] || '').trim();
+        const m = v && v !== '0' && mn.find(n => n.vlan === v);
+        if (m) out.push({ level: 'warn', field: k + 'Vlan', msg: label + ' VLAN ' + v + ' is the management domain ' + m.label + ' VLAN (Management Domain tab); use a VLAN of its own for the workload domain' });
+        const c = hasGw && N.isCidr(s[k + 'Gw']) ? s[k + 'Gw'] : null;
+        const o = c && mn.find(n => n.cidr && N.cidrsOverlap(c, n.cidr.cidr));
+        if (o) out.push({ level: 'warn', field: k + 'Gw', msg: label + ' subnet overlaps the management domain ' + o.label + ' subnet ' + o.cidr.network + '/' + o.cidr.prefix + ' (Management Domain tab); use a subnet of its own for the workload domain' });
+      }
       if (!full(s)) return out;
       const racks = racksOf(s);
       const multi = racks.length > 1;

@@ -396,6 +396,21 @@
   }
 
   // ---------- rules ----------
+  function netList(s) {
+    const nets = [['mgmt', 'ESX management']];
+    if (sepVmMgmt(s)) nets.push(['vmMgmt', 'VM management']);
+    if (sepVcfMgmt(s)) nets.push(['vcfMgmt', 'VCF management']);
+    nets.push(['vmotion', 'vMotion']);
+    if (isVsan(s)) nets.push(['vsan', 'vSAN']);
+    if (s.storage === 'nfs') nets.push(['nfs', 'NFS']);
+    if (fullStack(s)) nets.push(['tep', 'Host overlay']);
+    if (fullStack(s) && s.vpcConn === 'distributed') nets.push(['dtgw', 'DTGW']);
+    return nets;
+  }
+
+  // Networks in use, for the workload domain forms: [{ label, vlan, gw }]
+  form.networks = s => netList(s).map(([k, label]) => ({ label, vlan: s[k + 'Vlan'], gw: k === 'tep' && s.tepMode !== 'pool' ? '' : s[k + 'Gw'] }));
+
   form.rules = function (s, g) {
     const out = [];
     const hosts = s.hosts.map(h => (h.fqdn || '').trim()).filter(Boolean);
@@ -423,14 +438,7 @@
     if (s.dns1 && s.dns2 && s.dns1.trim() === s.dns2.trim()) out.push({ level: 'warn', field: 'dns2', msg: 'DNS server 2 is the same as DNS server 1' });
 
     // Networks
-    const nets = [['mgmt', 'ESX management', true]];
-    if (sepVmMgmt(s)) nets.push(['vmMgmt', 'VM management', true]);
-    if (sepVcfMgmt(s)) nets.push(['vcfMgmt', 'VCF management', true]);
-    nets.push(['vmotion', 'vMotion', true]);
-    if (isVsan(s)) nets.push(['vsan', 'vSAN', true]);
-    if (s.storage === 'nfs') nets.push(['nfs', 'NFS', true]);
-    if (fullStack(s) && s.tepMode === 'pool') nets.push(['tep', 'Host overlay', true]);
-    if (fullStack(s) && s.vpcConn === 'distributed') nets.push(['dtgw', 'DTGW', true]);
+    const nets = netList(s).filter(([k]) => k !== 'tep' || s.tepMode === 'pool');
 
     for (let i = 0; i < nets.length; i++) {
       for (let j = i + 1; j < nets.length; j++) {
