@@ -731,7 +731,7 @@
       return { project: true };
     }
     const id = detectForm(json);
-    if (!id) return { error: 'Could not recognise this JSON. Supported: VCF Installer spec (SddcSpec), workload domain spec (DomainCreationSpec), cluster stretch spec (ClusterUpdateSpec / ClusterStretchSpec), or a project file saved from this tool.' };
+    if (!id) return { error: 'Could not recognise this JSON. Supported: VCF Installer spec (SddcSpec), workload domain spec (DomainCreationSpec), cluster spec (ClusterCreationSpec), cluster stretch spec (ClusterUpdateSpec / ClusterStretchSpec), or a project file saved from this tool.' };
     const form = App.forms[id];
     const raw = form.rawSchema ? form.rawSchema(json) : null;
     const rawIssues = raw ? App.validateJson(json, raw.api, raw.type) : [];

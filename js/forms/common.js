@@ -177,6 +177,91 @@
     ];
   };
 
+  // ---------- "Get from VCF" lookup commands shared by the Day-N forms ----------
+  const L = C.lookup = {};
+  const q = v => String(v || '').replace(/["'`$\\]/g, '').trim();
+  const val = (g, id, ph) => q(g(id)) || ph;
+  const SDDC_PH = '<sddc-manager-fqdn>';
+
+  function login(g) {
+    const user = val(g, 'sddcUser', 'administrator@vsphere.local');
+    return {
+      bash: 'SDDC=' + val(g, 'sddcFqdn', SDDC_PH) + '; read -rsp "Password for ' + user + ': " PW; echo; TOKEN=$(curl -sk -X POST "https://$SDDC/v1/tokens" -H "Content-Type: application/json" -d "$(jq -n --arg u \'' + user + '\' --arg p "$PW" \'{username:$u,password:$p}\')" | jq -r .accessToken)',
+      pwsh: 'Connect-VcfSddcManagerServer -Server ' + val(g, 'sddcFqdn', SDDC_PH) + ' -User ' + user + ' -Password (Read-Host -AsSecureString "Password for ' + user + '")',
+    };
+  }
+  const get = path => 'curl -sk -H "Authorization: Bearer $TOKEN" "https://$SDDC' + path + '"';
+  const vcConnect = g => 'Connect-VIServer -Server ' + val(g, 'vcFqdn', '<vcenter-fqdn>');
+
+  function kv(text) {
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    return lines.map(l => {
+      const o = {};
+      for (const m of l.matchAll(/(\w+)=(\S*)/g)) o[m[1]] = m[2];
+      return o;
+    }).filter(o => Object.keys(o).length);
+  }
+
+  Object.assign(L, { q, val, login, get, vcConnect, kv });
+
+  L.pool = (nameId, idId, note) => (s, g) => {
+    const name = val(g, nameId, '<pool-name>');
+    const l = login(g);
+    return {
+      title: 'Get the network pool ID from SDDC Manager',
+      note,
+      bash: [l.bash, get('/v1/network-pools') + " | jq -r '.elements[] | select(.name==\"" + name + "\") | \"id=\\(.id) name=\\(.name)\"'"],
+      pwsh: [l.pwsh, "(Invoke-VcfGetNetworkPool).Elements | Where-Object Name -eq '" + name + "' | ForEach-Object { \"id=$($_.Id) name=$($_.Name)\" }"],
+      apply: (text, st) => {
+        const r = kv(text).find(o => o.id);
+        if (!r) return false;
+        st[idId] = r.id;
+        return true;
+      },
+    };
+  };
+
+  L.hosts = (rowsId, note) => (s, g) => {
+    const fqdns = s[rowsId].map(h => q(h.fqdn)).filter(Boolean);
+    const l = login(g);
+    const jqSel = fqdns.length ? 'select(.fqdn as $f | ' + JSON.stringify(fqdns) + ' | index($f)) | ' : '';
+    const psSel = fqdns.length ? 'Where-Object Fqdn -in @(' + fqdns.map(f => "'" + f + "'").join(',') + ') | ' : '';
+    return {
+      title: 'Get host IDs from SDDC Manager',
+      note: note + ' Only unassigned, usable hosts are listed. Paste the output to fill the IDs; hosts not yet in the table are added.',
+      bash: [l.bash, get('/v1/hosts?status=UNASSIGNED_USEABLE') + " | jq -r '.elements[] | " + jqSel + '"\\(.fqdn) \\(.id)"\''],
+      pwsh: [l.pwsh, '(Invoke-VcfGetHosts -Status UNASSIGNED_USEABLE).Elements | ' + psSel + 'ForEach-Object { "$($_.Fqdn) $($_.Id)" }'],
+      applyHint: 'sfo02-m01-r01-esx01.sfo.rainpole.io 64d34a69-104d-443e-bd92-d949e278da83',
+      apply: (text, st) => {
+        let n = 0;
+        for (const line of text.split(/\r?\n/)) {
+          const m = line.trim().match(/^(\S+)\s+([0-9a-fA-F-]{36})$/);
+          if (!m) continue;
+          const rows = st[rowsId];
+          const row = rows.find(h => (h.fqdn || '').trim().toLowerCase() === m[1].toLowerCase());
+          if (row) row.id = m[2];
+          else {
+            const empty = rows.find(h => !(h.fqdn || '').trim());
+            if (empty) Object.assign(empty, { fqdn: m[1], id: m[2] });
+            else rows.push({ fqdn: m[1], id: m[2] });
+          }
+          n++;
+        }
+        return n > 0;
+      },
+    };
+  };
+
+
+  L.section = (intro, extra) => ({
+    id: 'connect', title: 'Connection to VCF (for lookups)',
+    intro: intro || 'Optional. Used only to build the "Get from VCF" commands; not written to the JSON. Commands need <code>curl</code> and <code>jq</code> (bash) or VCF PowerCLI 9.',
+    fields: [
+      { id: 'sddcFqdn', label: 'SDDC Manager FQDN', type: 'text', fmt: 'fqdn', rerender: true, ph: 'sfo-vcf01.sfo.rainpole.io', help: 'SDDC Manager of the VCF instance.' },
+      { id: 'sddcUser', label: 'SDDC Manager user', type: 'text', def: 'administrator@vsphere.local', rerender: true, help: 'User for the API token / PowerCLI connection. The password is prompted when you run the command, never stored here.' },
+    ].concat(extra || []),
+  });
+
   // Range checks shared by forms: returns rule issues.
   C.rangeRules = function (out, opts) {
     const { label, gw, start, end, fieldStart, fieldEnd, need, needMsg } = opts;

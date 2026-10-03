@@ -16,7 +16,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, '.schema-cache')
 APIS = {
     'vcf-installer-api': ['SddcSpec'],
-    'sddc-manager-api': ['DomainCreationSpec', 'ClusterUpdateSpec', 'NetworkPool', 'HostCommissionSpec'],
+    'sddc-manager-api': ['DomainCreationSpec', 'ClusterCreationSpec', 'ClusterUpdateSpec', 'NetworkPool', 'HostCommissionSpec'],
 }
 
 
