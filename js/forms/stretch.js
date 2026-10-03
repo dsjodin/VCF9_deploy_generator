@@ -18,6 +18,163 @@
     ];
   }
 
+
+  // ---------- lookup commands (pull values from VCF into the form) ----------
+  const q = v => String(v || '').replace(/["'`$\\]/g, '').trim();
+  const val = (g, id, ph) => q(g(id)) || ph;
+  const SDDC_PH = '<sddc-manager-fqdn>';
+
+  function login(g) {
+    const user = val(g, 'sddcUser', 'administrator@vsphere.local');
+    return {
+      bash: 'SDDC=' + val(g, 'sddcFqdn', SDDC_PH) + '; read -rsp "Password for ' + user + ': " PW; echo; TOKEN=$(curl -sk -X POST "https://$SDDC/v1/tokens" -H "Content-Type: application/json" -d "$(jq -n --arg u \'' + user + '\' --arg p "$PW" \'{username:$u,password:$p}\')" | jq -r .accessToken)',
+      pwsh: 'Connect-VcfSddcManagerServer -Server ' + val(g, 'sddcFqdn', SDDC_PH) + ' -User ' + user + ' -Password (Read-Host -AsSecureString "Password for ' + user + '")',
+    };
+  }
+  const get = path => 'curl -sk -H "Authorization: Bearer $TOKEN" "https://$SDDC' + path + '"';
+  const vcConnect = g => 'Connect-VIServer -Server ' + val(g, 'vcFqdn', '<vcenter-fqdn>');
+
+  function kv(text) {
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    return lines.map(l => {
+      const o = {};
+      for (const m of l.matchAll(/(\w+)=(\S*)/g)) o[m[1]] = m[2];
+      return o;
+    }).filter(o => Object.keys(o).length);
+  }
+
+  function clusterLookup(s, g) {
+    const name = q(g('clusterName'));
+    const sel = name ? 'select(.name=="' + name + '") | ' : '';
+    const where = name ? "Where-Object Name -eq '" + name + "' | " : '';
+    const l = login(g);
+    return {
+      title: 'Get cluster ID, vSAN type and NSX switch from SDDC Manager',
+      note: 'Run the login line once per shell, then the query. Paste the output below to fill <b>Cluster ID</b>, <b>vSAN architecture</b> and <b>NSX distributed switch</b>.',
+      bash: [l.bash, get('/v1/clusters') + " | jq -r '.elements[] | " + sel + '"name=\\(.name) id=\\(.id) type=\\(.primaryDatastoreType) stretched=\\(.isStretched) nsxVds=\\([.vdsSpecs[]? | select(.nsxtSwitchConfig != null) | .name] | join(","))"\''],
+      pwsh: [l.pwsh, '(Invoke-VcfGetClusters).Elements | ' + where + 'ForEach-Object { "name=$($_.Name) id=$($_.Id) type=$($_.PrimaryDatastoreType) stretched=$($_.IsStretched) nsxVds=$((@($_.VdsSpecs | Where-Object NsxtSwitchConfig).Name) -join \',\')" }'],
+      apply: (text, st) => {
+        const rows = kv(text);
+        const r = rows.find(o => o.name && o.name === st.clusterName) || rows[0];
+        if (!r || !r.id) return false;
+        st.clusterId = r.id;
+        if (r.name && !st.clusterName) st.clusterName = r.name;
+        if (r.type === 'VSAN_ESA') st.vsanType = 'vsan-esa';
+        else if (r.type === 'VSAN') st.vsanType = 'vsan-osa';
+        if (r.nsxVds) st.nsxVds = r.nsxVds.split(',')[0];
+        if (r.stretched === 'true') alert('SDDC Manager reports this cluster as already stretched.');
+        return true;
+      },
+    };
+  }
+
+  function poolLookup(s, g) {
+    const name = val(g, 'poolName', '<pool-name>');
+    const l = login(g);
+    return {
+      title: 'Get the network pool ID from SDDC Manager',
+      note: 'Run after the AZ2 network pool (file 1) is created.',
+      bash: [l.bash, get('/v1/network-pools') + " | jq -r '.elements[] | select(.name==\"" + name + "\") | \"id=\\(.id) name=\\(.name)\"'"],
+      pwsh: [l.pwsh, "(Invoke-VcfGetNetworkPool).Elements | Where-Object Name -eq '" + name + "' | ForEach-Object { \"id=$($_.Id) name=$($_.Name)\" }"],
+      apply: (text, st) => {
+        const r = kv(text).find(o => o.id);
+        if (!r) return false;
+        st.poolId = r.id;
+        return true;
+      },
+    };
+  }
+
+  function hostLookup(s, g) {
+    const fqdns = s.hosts.map(h => q(h.fqdn)).filter(Boolean);
+    const l = login(g);
+    const jqSel = fqdns.length ? 'select(.fqdn as $f | ' + JSON.stringify(fqdns) + ' | index($f)) | ' : '';
+    const psSel = fqdns.length ? 'Where-Object Fqdn -in @(' + fqdns.map(f => "'" + f + "'").join(',') + ') | ' : '';
+    return {
+      title: 'Get host IDs from SDDC Manager',
+      note: 'Run after the AZ2 hosts are commissioned (file 2). Only unassigned, usable hosts are listed. Paste the output to fill the IDs; hosts not yet in the table are added.',
+      bash: [l.bash, get('/v1/hosts?status=UNASSIGNED_USEABLE') + " | jq -r '.elements[] | " + jqSel + '"\\(.fqdn) \\(.id)"\''],
+      pwsh: [l.pwsh, '(Invoke-VcfGetHosts -Status UNASSIGNED_USEABLE).Elements | ' + psSel + 'ForEach-Object { "$($_.Fqdn) $($_.Id)" }'],
+      applyHint: 'sfo02-m01-r01-esx01.sfo.rainpole.io 64d34a69-104d-443e-bd92-d949e278da83',
+      apply: (text, st) => {
+        let n = 0;
+        for (const line of text.split(/\r?\n/)) {
+          const m = line.trim().match(/^(\S+)\s+([0-9a-fA-F-]{36})$/);
+          if (!m) continue;
+          const row = st.hosts.find(h => (h.fqdn || '').trim().toLowerCase() === m[1].toLowerCase());
+          if (row) row.id = m[2];
+          else {
+            const empty = st.hosts.find(h => !(h.fqdn || '').trim());
+            if (empty) Object.assign(empty, { fqdn: m[1], id: m[2] });
+            else st.hosts.push({ fqdn: m[1], id: m[2] });
+          }
+          n++;
+        }
+        return n > 0;
+      },
+    };
+  }
+
+  function nicLookup(s, g) {
+    const cl = val(g, 'clusterName', '<cluster-name>');
+    return {
+      title: 'Get the vmnic / switch / uplink mapping from vCenter',
+      note: 'The uplink assignment is only exposed by vCenter, so this uses VCF PowerCLI against the vCenter of the cluster (first host of the cluster). Without PowerCLI, check an AZ1 host in the vSphere Client (Configure &gt; Virtual switches) or run the ESXi command, which lists the vmnics of each switch.',
+      bash: ['ssh root@<az1-host-fqdn> esxcli network vswitch dvs vmware list | grep -E "^[^ ]|Uplinks:"'],
+      pwsh: [vcConnect(g), "$h = Get-Cluster '" + cl + "' | Get-VMHost | Select-Object -First 1; Get-VDSwitch -VMHost $h | ForEach-Object { $sw = $_; Get-VDPort -VDSwitch $sw -Uplink | Where-Object { $_.ProxyHost.Name -eq $h.Name -and $_.ConnectedEntity } | ForEach-Object { '{0},{1},{2}' -f $_.ConnectedEntity.Name, $sw.Name, $_.Name } }"],
+      applyHint: 'vmnic0,sfo-m01-cl01-vds01,uplink1',
+      apply: (text, st) => {
+        const rows = [];
+        for (const line of text.split(/\r?\n/)) {
+          const m = line.trim().match(/^(vmnic\d+)[,;\s]+(\S+?)[,;\s]+(\S+)$/);
+          if (m) rows.push({ id: m[1], vds: m[2], uplink: m[3] });
+        }
+        if (!rows.length) return false;
+        rows.sort((a, b) => a.vds.localeCompare(b.vds) || a.uplink.localeCompare(b.uplink, undefined, { numeric: true }));
+        st.nics = rows;
+        return true;
+      },
+    };
+  }
+
+  function nsxVdsLookup(s, g) {
+    const c = clusterLookup(s, g);
+    return Object.assign(c, { title: 'Get the NSX-prepared switch from SDDC Manager', note: 'Same query as the cluster ID lookup; fills the NSX distributed switch (and cluster ID / vSAN type).' });
+  }
+
+  function poolNameLookup(s, g) {
+    const nsx = val(g, 'nsxFqdn', '<nsx-manager-vip-fqdn>');
+    return {
+      title: 'List existing NSX IP pools',
+      note: 'Queries NSX Manager of the cluster\'s domain (prompts for the admin password).',
+      bash: ['curl -sk -u admin "https://' + nsx + '/policy/api/v1/infra/ip-pools" | jq -r \'.results[] | .display_name\''],
+      pwsh: ['(Invoke-RestMethod -Uri "https://' + nsx + '/policy/api/v1/infra/ip-pools" -Credential (Get-Credential admin) -Authentication Basic -SkipCertificateCheck).results.display_name'],
+    };
+  }
+
+  function witnessLookup(s, g) {
+    const w = val(g, 'witnessFqdn', '<witness-fqdn>');
+    return {
+      title: 'Get the witness vSAN IP and subnet',
+      note: 'Reads the vSAN-tagged VMkernel adapter of the witness host. Paste the output to fill <b>Witness vSAN IP</b> and <b>Witness vSAN subnet</b>.',
+      bash: ['ssh root@' + w + " \"esxcli network ip interface ipv4 get -i \\$(esxcli vsan network list | awk '/VmkNic Name/ {print \\$3; exit}')\""],
+      pwsh: [vcConnect(g), "Get-VMHost '" + w + "' | Get-VMHostNetworkAdapter -VMKernel | Where-Object VsanTrafficEnabled | ForEach-Object { \"$($_.IP) $($_.SubnetMask)\" }"],
+      applyHint: '10.17.10.218 255.255.255.0',
+      apply: (text, st) => {
+        const ips = text.match(/\b\d{1,3}(\.\d{1,3}){3}\b/g) || [];
+        for (let i = 0; i + 1 < ips.length; i++) {
+          const p = N.maskToPrefix(ips[i + 1]);
+          if (N.maskToPrefix(ips[i]) === null && p) {
+            st.witnessIp = ips[i];
+            st.witnessCidr = N.parseCidr(ips[i] + '/' + p).cidr;
+            return true;
+          }
+        }
+        return false;
+      },
+    };
+  }
+
   const P = 'clusterStretchSpec.networkSpec.nsxClusterSpec';
 
   const form = {
@@ -28,11 +185,21 @@
     schema: { api: 'sddc-manager-api', root: 'ClusterUpdateSpec' },
     sections: [
       {
+        id: 'connect', title: 'Connection to VCF (for lookups)',
+        intro: 'Optional. Used only to build the "Get from VCF" commands below; not written to the JSON. Commands need <code>curl</code> and <code>jq</code> (bash) or VCF PowerCLI 9.',
+        fields: [
+          { id: 'sddcFqdn', label: 'SDDC Manager FQDN', type: 'text', fmt: 'fqdn', rerender: true, ph: 'sfo-vcf01.sfo.rainpole.io', help: 'SDDC Manager of the VCF instance that owns the cluster.' },
+          { id: 'sddcUser', label: 'SDDC Manager user', type: 'text', def: 'administrator@vsphere.local', rerender: true, help: 'User for the API token / PowerCLI connection. The password is prompted when you run the command, never stored here.' },
+          { id: 'vcFqdn', label: 'vCenter FQDN', type: 'text', fmt: 'fqdn', rerender: true, ph: 'sfo-m01-vc01.sfo.rainpole.io', help: 'vCenter of the cluster (and where the witness host is registered). Used for the NIC mapping and witness lookups.' },
+          { id: 'nsxFqdn', label: 'NSX Manager VIP FQDN', type: 'text', fmt: 'fqdn', rerender: true, ph: 'sfo-m01-nsx01.sfo.rainpole.io', help: 'NSX Manager of the cluster\'s domain. Used to list existing IP pools.' },
+        ],
+      },
+      {
         id: 'target', title: 'Target cluster',
         fields: [
-          { id: 'clusterName', label: 'Cluster name', type: 'text', req: true, ph: 'sfo-m01-cl01', help: 'Name of the vSAN cluster to stretch (used for file names and documentation).' },
-          { id: 'clusterId', label: 'SDDC Manager cluster ID', type: 'text', help: 'UUID of the cluster from <code>GET /v1/clusters</code>. Used in the API path <code>PATCH /v1/clusters/{id}</code>. Not part of the JSON body.' },
-          { id: 'vsanType', label: 'vSAN architecture', type: 'select', def: 'vsan-esa', options: C.storage.slice(0, 2), help: 'Architecture of the existing cluster. Determines the commissioning storage type.' },
+          { id: 'clusterName', label: 'Cluster name', type: 'text', req: true, rerender: true, ph: 'sfo-m01-cl01', help: 'Name of the vSAN cluster to stretch (used for file names and documentation).' },
+          { id: 'clusterId', label: 'SDDC Manager cluster ID', type: 'text', help: 'UUID of the cluster from <code>GET /v1/clusters</code>. Used in the API path <code>PATCH /v1/clusters/{id}</code>. Not part of the JSON body.', lookup: clusterLookup },
+          { id: 'vsanType', label: 'vSAN architecture', type: 'select', def: 'vsan-esa', options: C.storage.slice(0, 2), help: 'Architecture of the existing cluster. Determines the commissioning storage type. Filled by the cluster ID lookup.' },
           { id: 'edgeMultiAz', label: 'Edge cluster is configured for multi-AZ', type: 'checkbox', def: true, help: 'Acknowledge that the NSX Edge cluster networking (uplink VLANs, BGP to AZ2 top-of-rack, route maps) is prepared to work after a site failover.', api: 'clusterStretchSpec.isEdgeClusterConfiguredForMultiAZ' },
           { id: 'noLicense', label: 'Deploy without license keys', type: 'checkbox', def: true, help: 'VCF 9 licenses through VCF Operations.', api: 'clusterStretchSpec.deployWithoutLicenseKeys' },
         ],
@@ -41,8 +208,8 @@
         id: 'witness', title: 'vSAN witness',
         intro: 'The witness host must already be deployed and reachable from the vSAN networks of both AZs.',
         fields: [
-          { id: 'witnessFqdn', label: 'Witness FQDN', type: 'text', fmt: 'fqdn', req: true, ph: 'sfo-m01-cl01-vsw01.sfo.rainpole.io', help: 'FQDN (management address) of the vSAN witness appliance.', api: 'clusterStretchSpec.witnessSpec.fqdn' },
-          { id: 'witnessIp', label: 'Witness vSAN IP', type: 'text', fmt: 'ipv4', req: true, ph: '10.17.10.218', help: 'IP address of the witness VMkernel adapter that carries vSAN witness traffic.', api: 'clusterStretchSpec.witnessSpec.vsanIp' },
+          { id: 'witnessFqdn', label: 'Witness FQDN', type: 'text', fmt: 'fqdn', req: true, rerender: true, ph: 'sfo-m01-cl01-vsw01.sfo.rainpole.io', help: 'FQDN (management address) of the vSAN witness appliance.', api: 'clusterStretchSpec.witnessSpec.fqdn' },
+          { id: 'witnessIp', label: 'Witness vSAN IP', type: 'text', fmt: 'ipv4', req: true, ph: '10.17.10.218', help: 'IP address of the witness VMkernel adapter that carries vSAN witness traffic.', api: 'clusterStretchSpec.witnessSpec.vsanIp', lookup: witnessLookup },
           { id: 'witnessCidr', label: 'Witness vSAN subnet (CIDR)', type: 'text', fmt: 'netcidr', req: true, ph: '10.17.10.0/24', help: 'Network address and prefix of the witness vSAN subnet, e.g. <code>10.17.10.0/24</code>.', api: 'clusterStretchSpec.witnessSpec.vsanCidr' },
           { id: 'witnessShared', label: 'Witness traffic shared with vSAN traffic', type: 'checkbox', def: false, help: 'Off (default): witness traffic uses the ESX management VMkernel (witness traffic separation). On: witness traffic shares the vSAN VMkernel.', api: 'clusterStretchSpec.witnessTrafficSharedWithVsanTraffic' },
         ],
@@ -50,7 +217,7 @@
       {
         id: 'pool', title: '1. AZ2 network pool',
         fields: [
-          { id: 'poolName', label: 'Network pool name', type: 'text', auto: (s, g) => g('clusterName') ? g('clusterName') + '-az2-np01' : '', help: 'Name of the AZ2 network pool in SDDC Manager.', api: 'name' },
+          { id: 'poolName', label: 'Network pool name', type: 'text', rerender: true, auto: (s, g) => g('clusterName') ? g('clusterName') + '-az2-np01' : '', help: 'Name of the AZ2 network pool in SDDC Manager.', api: 'name' },
           ...poolNet('vmotion', 'vMotion (AZ2)', { vlan: '1212', gw: '10.12.12.1/24', start: '10.12.12.101', end: '10.12.12.116' }),
           ...poolNet('vsan', 'vSAN (AZ2)', { vlan: '1213', gw: '10.12.13.1/24', start: '10.12.13.101', end: '10.12.13.116' }),
         ],
@@ -60,16 +227,16 @@
         intro: 'Add the same number of hosts in AZ2 as in AZ1. Commission them into the AZ2 network pool, then copy their IDs here.',
         fields: [
           { id: 'esxPw', label: 'ESX root password', type: 'password', req: true, pw: C.pw.esx, help: 'Root password of the AZ2 hosts.', api: 'password' },
-          { id: 'poolId', label: 'Network pool ID', type: 'text', help: 'ID of the AZ2 network pool (GET /v1/network-pools). Leave empty to keep a placeholder.', api: 'networkPoolId' },
+          { id: 'poolId', label: 'Network pool ID', type: 'text', help: 'ID of the AZ2 network pool (GET /v1/network-pools). Leave empty to keep a placeholder.', api: 'networkPoolId', lookup: poolLookup },
           {
-            id: 'hosts', label: 'AZ2 hosts', type: 'rows', min: 1, max: 32, initial: 4, addLabel: 'Add host',
+            id: 'hosts', label: 'AZ2 hosts', type: 'rows', min: 1, max: 32, initial: 4, addLabel: 'Add host', lookup: hostLookup,
             columns: [
-              { id: 'fqdn', label: 'Host FQDN', type: 'text', fmt: 'fqdn', req: true, ph: (s, g, i) => 'sfo02-m01-r01-esx0' + ((i || 0) + 1) + '.sfo.rainpole.io', help: 'AZ2 host FQDN.', api: 'clusterStretchSpec.hostSpecs[].hostName' },
+              { id: 'fqdn', label: 'Host FQDN', type: 'text', fmt: 'fqdn', req: true, rerender: true, ph: (s, g, i) => 'sfo02-m01-r01-esx0' + ((i || 0) + 1) + '.sfo.rainpole.io', help: 'AZ2 host FQDN.', api: 'clusterStretchSpec.hostSpecs[].hostName' },
               { id: 'id', label: 'SDDC Manager host ID', type: 'text', help: 'UUID after commissioning (GET /v1/hosts?status=UNASSIGNED_USEABLE).', api: 'clusterStretchSpec.hostSpecs[].id', check: v => /^[0-9a-fA-F-]{36}$/.test(v) || { level: 'warn', msg: 'Host IDs are normally UUIDs' } },
             ],
           },
           {
-            id: 'nics', label: 'Physical NIC mapping (same as the AZ1 hosts)', type: 'rows', min: 2, max: 8, initial: 2, addLabel: 'Add NIC',
+            id: 'nics', label: 'Physical NIC mapping (same as the AZ1 hosts)', type: 'rows', min: 2, max: 8, initial: 2, addLabel: 'Add NIC', lookup: nicLookup,
             hint: 'Map every vmnic to the distributed switch and uplink it uses in the existing cluster.',
             columns: [
               { id: 'id', label: 'vmnic', type: 'text', fmt: 'vmnic', req: true, def: '', ph: (s, g, i) => 'vmnic' + (i || 0), help: 'Physical NIC name.', api: 'clusterStretchSpec.hostSpecs[].hostNetworkSpec.vmNics[].id' },
@@ -84,8 +251,8 @@
         fields: [
           { id: 'tepVlan', label: 'AZ2 host overlay VLAN', type: 'text', fmt: 'vlan', req: true, ph: '1214', help: 'VLAN for AZ2 host TEPs.', api: P + '.uplinkProfiles[].transportVlan' },
           { id: 'tepMode', label: 'TEP IP assignment', type: 'select', options: C.tepMode, def: 'pool', rerender: true, help: 'How AZ2 TEPs get IPs.' },
-          { id: 'nsxVds', label: 'NSX distributed switch', type: 'text', req: true, show: pool, auto: s => ((s.nics || [])[0] || {}).vds || '', help: 'Distributed switch of the cluster that is prepared for NSX.', api: 'clusterStretchSpec.networkSpec.networkProfiles[].nsxtHostSwitchConfigs[].vdsName' },
-          { id: 'tepPoolName', label: 'AZ2 IP pool name', type: 'text', show: pool, auto: (s, g) => g('clusterName') ? g('clusterName') + '-az2-tep01' : '', pattern: '^[a-zA-Z0-9-_]+$', patternMsg: 'Letters, digits, - and _ only', help: 'Name of the NSX IP pool for AZ2 TEPs.', api: P + '.ipAddressPoolsSpec[].name' },
+          { id: 'nsxVds', label: 'NSX distributed switch', type: 'text', req: true, show: pool, auto: s => ((s.nics || [])[0] || {}).vds || '', help: 'Distributed switch of the cluster that is prepared for NSX.', api: 'clusterStretchSpec.networkSpec.networkProfiles[].nsxtHostSwitchConfigs[].vdsName', lookup: nsxVdsLookup },
+          { id: 'tepPoolName', label: 'AZ2 IP pool name', type: 'text', show: pool, auto: (s, g) => g('clusterName') ? g('clusterName') + '-az2-tep01' : '', pattern: '^[a-zA-Z0-9-_]+$', patternMsg: 'Letters, digits, - and _ only', help: 'Name of the NSX IP pool for AZ2 TEPs. With "Re-use an existing IP pool" this must match an existing pool.', api: P + '.ipAddressPoolsSpec[].name', lookup: poolNameLookup },
           { id: 'tepReuse', label: 'Re-use an existing IP pool', type: 'checkbox', show: pool, rerender: true, help: 'Reference an existing NSX IP pool by name only.' },
           { id: 'tepGw', label: 'Gateway (CIDR notation)', type: 'text', fmt: 'gwcidr', req: true, show: newPool, ph: '10.12.14.1/24', help: 'AZ2 TEP subnet gateway with prefix.', api: P + '.ipAddressPoolsSpec[].subnets[].gateway' },
           { id: 'tepStart', label: 'IP pool start', type: 'text', fmt: 'ipv4', req: true, show: newPool, ph: '10.12.14.101', help: 'First AZ2 TEP address.', api: P + '.ipAddressPoolsSpec[].subnets[].ipAddressPoolRanges[].start' },

@@ -135,6 +135,15 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 }
 .icon.danger:hover { color: var(--err); border-color: var(--err); }
 
+/* lookup commands */
+.lookup { grid-column: 1 / -1; margin-top: 4px; border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; background: var(--accent-soft); }
+.lookup summary { cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--accent); }
+.lookup[open] { padding-bottom: 8px; }
+.lookup .cmd-title { font-size: 12px; font-weight: 600; margin: 8px 0 3px; }
+.lookup .cmd { display: flex; gap: 6px; align-items: flex-start; margin-bottom: 4px; }
+.lookup .cmd pre { flex: 1; margin: 0; padding: 6px 8px; background: var(--code); border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+.lookup textarea { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+
 /* rows */
 .tablewrap { overflow-x: auto; }
 table.rows { border-collapse: collapse; width: 100%; }

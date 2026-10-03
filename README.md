@@ -24,6 +24,21 @@ It also works as a GitHub Pages site.
 
 Host IDs, network pool IDs and the cluster image ID only exist after earlier steps. Paste them into the form, or leave them empty and replace the `<--ENTER-...-->` placeholders in the JSON.
 
+### Get from VCF (Stretch vSAN Cluster)
+
+Fields that need values from the running environment have a **Get from VCF** panel with copy-ready one-liners, built from what you already entered (SDDC Manager, vCenter and NSX FQDNs in "Connection to VCF"):
+
+| Field | Source | Commands |
+|---|---|---|
+| Cluster ID, vSAN architecture, NSX switch | SDDC Manager `GET /v1/clusters` | curl + jq, VCF PowerCLI `Invoke-VcfGetClusters` |
+| Network pool ID | SDDC Manager `GET /v1/network-pools` | curl + jq, `Invoke-VcfGetNetworkPool` |
+| AZ2 host IDs | SDDC Manager `GET /v1/hosts?status=UNASSIGNED_USEABLE` | curl + jq, `Invoke-VcfGetHosts` |
+| vmnic / switch / uplink mapping | vCenter | PowerCLI `Get-VDPort -Uplink` (esxcli as fallback) |
+| Witness vSAN IP and subnet | witness host | esxcli over SSH, PowerCLI `Get-VMHostNetworkAdapter` |
+| Existing TEP IP pools | NSX Manager `GET /policy/api/v1/infra/ip-pools` | curl + jq, `Invoke-RestMethod` |
+
+Passwords are prompted when the command runs and are never stored in the form. Paste the command output into the panel and click **Fill form** to fill the fields.
+
 ## Using the form
 
 - Grey text in a field is either the workbook sample (`e.g. ...`) or the value that will be generated if you leave it empty (`Auto: ...`).

@@ -13,6 +13,7 @@
     issues: [],
     files: [],
     touched: new Set(),
+    openLookups: new Set(),
     showAll: false,
     fileIdx: 0,
   };
@@ -414,7 +415,53 @@
       kids.push(h('div', { class: 'hint' }, typeof f.hint === 'function' ? f.hint(s, get) : f.hint));
     }
     kids.push(h('div', { class: 'err', id: 'e-' + key }));
-    return h('div', { class: 'field' + (f.type === 'checkbox' ? ' cb' : '') + (f.wide ? ' wide' : ''), 'data-field': key }, kids);
+    const box = h('div', { class: 'field' + (f.type === 'checkbox' ? ' cb' : '') + (f.wide ? ' wide' : ''), 'data-field': key }, kids);
+    if (!f.lookup) return box;
+    const frag = document.createDocumentFragment();
+    frag.append(box, renderLookup(f, key, s, get));
+    return frag;
+  }
+
+  // "Get from VCF" panel: copy-ready commands built from the form, plus a paste box that fills the form.
+  function renderLookup(f, key, s, get) {
+    const det = h('details', { class: 'lookup', 'data-lookup': key });
+    const fill = () => {
+      const L = f.lookup(s, get);
+      det.innerHTML = '';
+      det.append(h('summary', {}, L.title || 'Get this value from VCF'));
+      if (L.note) det.append(h('p', { class: 'hint', html: L.note }));
+      for (const [label, lines] of [['Bash (curl + jq)', L.bash], ['VCF PowerCLI', L.pwsh]]) {
+        if (!lines || !lines.length) continue;
+        det.append(h('div', { class: 'cmd-title' }, label));
+        for (const line of lines) {
+          const btn = h('button', { type: 'button', class: 'btn small' }, 'Copy');
+          btn.onclick = () => navigator.clipboard.writeText(line).then(() => {
+            btn.textContent = 'Copied';
+            setTimeout(() => { btn.textContent = 'Copy'; }, 1200);
+          });
+          det.append(h('div', { class: 'cmd' }, h('pre', {}, line), btn));
+        }
+      }
+      if (L.apply) {
+        const ta = h('textarea', { rows: 3, spellcheck: 'false', placeholder: L.applyHint || 'Paste the command output here' });
+        const msg = h('span', { class: 'hint' });
+        det.append(h('div', { class: 'cmd-title' }, 'Fill the form from the output'), ta,
+          h('div', { class: 'rowtools' }, h('button', {
+            type: 'button', class: 'btn small primary',
+            onclick: () => {
+              const r = L.apply(ta.value, s);
+              if (r) { App.touched.add(key); changed(true); } else msg.textContent = 'Nothing recognised in the pasted text.';
+            },
+          }, 'Fill form'), msg));
+      }
+    };
+    fill();
+    if (App.openLookups.has(key)) det.open = true;
+    det.addEventListener('toggle', () => {
+      if (det.open) App.openLookups.add(key);
+      else App.openLookups.delete(key);
+    });
+    return det;
   }
 
   function renderRows(f, s, get) {
@@ -447,6 +494,7 @@
       f.hint ? h('div', { class: 'hint' }, typeof f.hint === 'function' ? f.hint(s, get) : f.hint) : null,
       h('div', { class: 'tablewrap' }, table),
       h('div', { class: 'rowtools' }, add, extra),
+      f.lookup ? renderLookup(f, f.id, s, get) : null,
       h('div', { class: 'err', id: 'e-' + f.id }));
   }
 
