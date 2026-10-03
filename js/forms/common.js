@@ -254,8 +254,8 @@
 
 
   L.section = (intro, extra) => ({
-    id: 'connect', title: 'Connection to VCF (for lookups)',
-    intro: intro || 'Optional. Used only to build the "Get from VCF" commands; not written to the JSON. Commands need <code>curl</code> and <code>jq</code> (bash) or VCF PowerCLI 9.',
+    id: 'connect', title: 'Lookup command settings',
+    intro: intro || 'Optional. This page never connects to VCF. These values are only inserted into the "Get from VCF" commands, which you copy and run yourself in your own shell; paste the output back to fill the form. Not written to the JSON. Commands need <code>curl</code> and <code>jq</code> (bash) or VCF PowerCLI 9.',
     fields: [
       { id: 'sddcFqdn', label: 'SDDC Manager FQDN', type: 'text', fmt: 'fqdn', rerender: true, ph: 'sfo-vcf01.sfo.rainpole.io', help: 'SDDC Manager of the VCF instance.' },
       { id: 'sddcUser', label: 'SDDC Manager user', type: 'text', def: 'administrator@vsphere.local', rerender: true, help: 'User for the API token / PowerCLI connection. The password is prompted when you run the command, never stored here.' },

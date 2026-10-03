@@ -2,7 +2,7 @@
 
 Web version of the VCF 9.1.1 Planning and Preparation Workbook. Fill in a form, get the JSON for the VCF Installer and SDDC Manager, validate it, and open existing JSON files to edit them.
 
-Static HTML/JS. No build step, no backend, nothing leaves the browser.
+Static HTML/JS. No build step, no backend, nothing leaves the browser. The page never connects to VCF or any other system: a Content-Security-Policy (`connect-src 'none'`) makes the browser block all network requests from the page.
 
 ## Run
 
@@ -29,7 +29,7 @@ With **Cluster type: Multi-rack Layer 3** (Workload Domain and Deploy Cluster) e
 
 ### Get from VCF
 
-Fields that need values from the running environment have a **Get from VCF** panel with copy-ready one-liners, built from what you already entered (SDDC Manager, vCenter and NSX FQDNs in "Connection to VCF"):
+Fields that need values from the running environment have a **Get from VCF** panel with copy-ready one-liners, built from what you already entered (SDDC Manager, vCenter and NSX FQDNs in "Lookup command settings"). The page does not run them: you copy a command, run it yourself in your own shell, and paste the output back:
 
 | Field | Source | Commands |
 |---|---|---|
