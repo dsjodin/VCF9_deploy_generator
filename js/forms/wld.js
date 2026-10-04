@@ -367,7 +367,7 @@
           ] : []),
           { id: 'datastoreName', label: 'Datastore name', type: 'text', maxLen: 80, req: true, show: s => !compute(s), auto: (s, g) => g('clusterName') ? g('clusterName') + '-ds-' + (isVsan(s) ? 'vsan01' : s.storage === 'nfs' ? 'nfs01' : 'vmfs01') : '', help: 'Datastore name (required for Day-N operations).', api: 'computeSpec.clusterSpecs[].datastoreSpec.vsanDatastoreSpec.datastoreName' },
           { id: 'ftt', label: 'Failures to tolerate', type: 'select', options: C.ftt.concat([{ v: '3', l: '3 failures (RAID-1 mirroring)', d: 'Tolerates three host failures. Requires at least 7 hosts.' }]), def: '1', show: s => s.storage === 'vsan-osa', help: 'vSAN OSA failures to tolerate.', api: 'computeSpec.clusterSpecs[].datastoreSpec.vsanDatastoreSpec.failuresToTolerate' },
-          { id: 'dedup', label: 'Deduplication and compression', type: 'checkbox', show: s => s.storage === 'vsan-osa', help: 'All-flash vSAN OSA only.', api: 'computeSpec.clusterSpecs[].datastoreSpec.vsanDatastoreSpec.dedupAndCompressionEnabled' },
+          { id: 'dedup', label: 'Deduplication and compression', type: 'checkbox', show: isVsan, help: 'vSAN ESA: global deduplication plus compression of the datastore (on top of the compression of the ESA storage policy). vSAN OSA: deduplication and compression on all-flash disk groups (not for hybrid). Workbook "vSAN: Deduplication and Compression".', api: 'computeSpec.clusterSpecs[].datastoreSpec.vsanDatastoreSpec.dedupAndCompressionEnabled' },
           { id: 'esaAutoClaim', label: 'Allow auto claim of HCL incompatible disks', type: 'checkbox', show: isEsa, help: 'Lets vSAN ESA claim non-certified disks (labs only).', api: 'computeSpec.clusterSpecs[].datastoreSpec.vsanDatastoreSpec.esaConfig.skipHclAutoDiskClaim' },
           { id: 'dit', label: 'vSAN data-in-transit encryption', type: 'checkbox', show: vsanNet, rerender: true, help: 'Encrypt vSAN traffic between hosts (workbook "Remote Data-in-Transit encryption" for a vSAN compute cluster).', api: 'computeSpec.clusterSpecs[].datastoreSpec.vsanDatastoreSpec.encryptionConfig.dataInTransitConfig.enable' },
           { id: 'rekey', label: 'Rekey interval', type: 'select', options: C.rekey, def: '1440', show: s => vsanNet(s) && s.dit, rerender: true, help: 'Key rotation interval.' },
@@ -722,6 +722,7 @@
           v.esaConfig = { enabled: true };
           if (s.storage === 'vsan-max') v.esaConfig.vsanMaxConfig = { enableVsanMax: true, enableVsanExternalNetwork: clientNet(s) };
           if (s.esaAutoClaim) v.esaConfig.skipHclAutoDiskClaim = true;
+          if (s.dedup) v.dedupAndCompressionEnabled = true;
         } else {
           v.esaConfig = { enabled: false };
           v.failuresToTolerate = Number(s.ftt);

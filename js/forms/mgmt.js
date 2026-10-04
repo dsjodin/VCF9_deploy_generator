@@ -204,7 +204,7 @@
           { id: 'datastoreName', label: 'Datastore name', type: 'text', maxLen: 80, auto: (s, g) => g('clusterName') ? g('clusterName') + '-ds-' + (isVsan(s) ? 'vsan01' : s.storage === 'nfs' ? 'nfs01' : 'vmfs01') : '', req: s => s.storage === 'fc', help: 'Name of the principal datastore. For VMFS on FC this must be the name of the existing VMFS datastore.', api: ['datastoreSpec.vsanSpec.datastoreName', 'datastoreSpec.nfsDatastoreSpec.datastoreName', 'datastoreSpec.vmfsDatastoreSpec.fcSpec[].datastoreName'] },
           { id: 'esaAutoClaim', label: 'Allow auto claim of HCL incompatible disks', type: 'checkbox', show: s => s.storage === 'vsan-esa', help: 'Lets vSAN ESA claim disks that are not on the vSAN ESA HCL. Use only for labs or when SDDC Manager cannot verify certified disks.', api: 'datastoreSpec.vsanSpec.esaConfig.skipHclAutoDiskClaim' },
           { id: 'ftt', label: 'Failures to tolerate', type: 'select', options: C.ftt, def: '1', show: s => s.storage === 'vsan-osa', help: 'vSAN OSA default storage policy failures to tolerate.', api: 'datastoreSpec.vsanSpec.failuresToTolerate' },
-          { id: 'dedup', label: 'Deduplication and compression', type: 'checkbox', show: s => s.storage === 'vsan-osa', help: 'Enable space efficiency on all-flash vSAN OSA disk groups.', api: 'datastoreSpec.vsanSpec.vsanDedup' },
+          { id: 'dedup', label: 'Deduplication and compression', type: 'checkbox', show: isVsan, help: 'vSAN ESA: global deduplication plus compression of the datastore (on top of the compression of the ESA storage policy). vSAN OSA: deduplication and compression on all-flash disk groups (not for hybrid). Workbook "vSAN: Deduplication and Compression".', api: 'datastoreSpec.vsanSpec.vsanDedup' },
           { id: 'dit', label: 'vSAN data-in-transit encryption', type: 'checkbox', show: isVsan, rerender: true, help: 'Encrypts all vSAN traffic between hosts.', api: 'datastoreSpec.vsanSpec.encryptionConfig.dataInTransitConfig.enable' },
           { id: 'rekey', label: 'Rekey interval', type: 'select', options: C.rekey, def: '1440', show: s => isVsan(s) && s.dit, rerender: true, help: 'How often data-in-transit encryption keys are rotated.', api: 'datastoreSpec.vsanSpec.encryptionConfig.dataInTransitConfig.rekeyInterval' },
           { id: 'rekeyCustom', label: 'Custom rekey interval (minutes)', type: 'text', fmt: 'int', req: true, show: s => isVsan(s) && s.dit && s.rekey === 'custom', ph: '1440', help: 'Rekey interval in minutes (30 - 10080).', check: v => (Number(v) >= 30 && Number(v) <= 10080) || 'Between 30 and 10080 minutes' },
@@ -597,6 +597,7 @@
     if (isVsan(s)) {
       const vsan = { datastoreName: g('datastoreName'), esaConfig: { enabled: s.storage === 'vsan-esa' } };
       if (s.storage === 'vsan-esa' && s.esaAutoClaim) vsan.esaConfig.skipHclAutoDiskClaim = true;
+      if (s.storage === 'vsan-esa' && s.dedup) vsan.vsanDedup = true;
       if (s.storage === 'vsan-osa') {
         vsan.vsanDedup = !!s.dedup;
         vsan.failuresToTolerate = Number(s.ftt);
