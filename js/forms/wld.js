@@ -25,7 +25,8 @@
   const racksOf = s => Array.from({ length: rackCount(s) }, (_, i) => i + 1);
   const rp = r => r > 1 ? 'r' + r + '_' : '';
   const rackSfx = r => r > 1 ? '-r0' + r : '';
-  const createPool = (s, r) => full(s) && s[rp(r || 1) + 'poolMode'] !== 'reuse';
+  const commission = s => !s.commissioned;
+  const createPool = (s, r) => full(s) && commission(s) && s[rp(r || 1) + 'poolMode'] !== 'reuse';
   const STATE = [{ v: 'Active', l: 'Active' }, { v: 'Standby', l: 'Standby' }, { v: 'Unused', l: 'Unused' }];
   const fullStack = s => s.vpcType === 'full';
   const distributed = s => fullStack(s) && s.vpcConn === 'distributed';
@@ -221,17 +222,17 @@
       C.storage.slice(2));
 
     const poolIdField = r => ({
-      id: rp(r) + 'poolId', label: 'Network pool ID', type: 'text', check: uuidCheck,
+      id: rp(r) + 'poolId', label: 'Network pool ID', type: 'text', check: uuidCheck, show: commission,
       help: 'ID of the network pool from <code>GET /v1/network-pools</code>. Leave empty to keep a placeholder in the commissioning JSON.', api: 'networkPoolId',
       lookup: C.lookup.pool(rp(r) + 'poolName', rp(r) + 'poolId', 'Run after the network pool is created (file 1), or for an existing pool.'),
     });
 
     const poolFields = r => [
-      { id: rp(r) + 'poolMode', label: 'VCF network pool', type: 'select', def: 'create', rerender: true, options: [
+      { id: rp(r) + 'poolMode', label: 'VCF network pool', type: 'select', def: 'create', rerender: true, show: commission, options: [
         { v: 'create', l: 'Create a new VCF network pool', d: 'Generates the network pool JSON (file 1).' },
         { v: 'reuse', l: 'Re-use an existing VCF network pool', d: 'Hosts are commissioned into an existing pool; no network pool file is generated.' },
       ], help: 'Workbook "VCF Network Pool Type".' },
-      { id: rp(r) + 'poolName', label: 'Network pool name', type: 'text', auto: (s, g) => { const p = CL ? g('clusterName') : g('domainName'); return p ? p + rackSfx(r) + '-np01' : ''; }, help: 'Name of the SDDC Manager network pool (new or existing).', api: 'name' },
+      { id: rp(r) + 'poolName', label: 'Network pool name', type: 'text', show: commission, auto: (s, g) => { const p = CL ? g('clusterName') : g('domainName'); return p ? p + rackSfx(r) + '-np01' : ''; }, help: 'Name of the SDDC Manager network pool (new or existing).', api: 'name' },
       ...POOLNETS.map(([k, label, , on]) => poolNet(r, k, label, on)).flat(),
     ];
 
@@ -326,15 +327,18 @@
       {
         id: 'pool', title: 'Network pool', num: true, show: full,
         intro: s => (l3(s) ? '<b>Rack 1.</b> ' : '') + 'vMotion and storage IP pools for the hosts. Created in SDDC Manager before commissioning the hosts.',
-        fields: [{ type: 'note', kind: 'warn', text: mgmtNote }].concat(poolFields(1)),
+        fields: [
+          { id: 'commissioned', label: 'Hosts are already commissioned', type: 'checkbox', def: false, rerender: true, help: 'The network pool(s) exist and the hosts are commissioned in SDDC Manager (they have host IDs). Files 1 and 2 are not generated; only the ' + (CL ? 'cluster' : 'domain') + ' spec. Set automatically when an imported spec has host IDs for all hosts.' },
+          { type: 'note', kind: 'warn', text: mgmtNote },
+        ].concat(poolFields(1)),
       },
       {
         id: 'hosts', title: 'Hosts', num: true, show: full,
         intro: s => (l3(s) ? '<b>Rack 1.</b> ' : '') + 'Hosts to commission and add to the cluster. After commissioning, get the host IDs with <b>Get from VCF</b> or copy them from SDDC Manager.',
         fields: [
-          { id: 'esxPw', label: 'ESX root password', type: 'password', req: true, pw: C.pw.esx, help: 'Root password of the hosts, used for commissioning.', api: 'password' },
+          { id: 'esxPw', label: 'ESX root password', type: 'password', req: commission, show: commission, pw: C.pw.esx, help: 'Root password of the hosts, used for commissioning.', api: 'password' },
           poolIdField(1),
-          { id: 'skipHcl', label: 'Skip vSAN ESA HCL compatibility pre-check', type: 'checkbox', show: isEsa, help: 'Bypass vSAN ESA HCL validation during commissioning (hosts without certified disks or when SDDC Manager cannot verify disks).', api: 'skipHclCompatibilityPrecheck' },
+          { id: 'skipHcl', label: 'Skip vSAN ESA HCL compatibility pre-check', type: 'checkbox', show: s => isEsa(s) && commission(s), help: 'Bypass vSAN ESA HCL validation during commissioning (hosts without certified disks or when SDDC Manager cannot verify disks).', api: 'skipHclCompatibilityPrecheck' },
           hostsField(1),
         ],
       },
@@ -544,6 +548,7 @@
           if (k && !(h.id || '').trim()) missingIds++;
         });
         const x = rp(r);
+        if (!commission(s)) continue;
         if (!(s[x + 'poolId'] || '').trim() && s[x + 'poolMode'] === 'reuse') out.push({ level: 'info', field: x + 'poolId', msg: 'Re-using a network pool' + inRack(r) + ': enter the existing pool ID or replace the placeholder in the commissioning JSON' });
         else if (!(s[x + 'poolId'] || '').trim()) out.push({ level: 'info', field: x + 'poolId', msg: 'Network pool ID' + inRack(r) + ' is empty; the commissioning JSON contains a placeholder (the UI variant uses the pool name instead)' });
       }
@@ -628,19 +633,19 @@
       }
 
       // 2. host commissioning
-      const commission = racks.map(r => rackRows(r).map(h => {
+      const commissionSpec = racks.map(r => rackRows(r).map(h => {
         const o = { fqdn: h.fqdn.trim(), username: 'root', password: s.esxPw, storageType, networkPoolId: (s[rp(r) + 'poolId'] || '').trim() || (r > 1 ? '<--ENTER-NETWORK-POOL-ID-RACK-' + r + '-->' : POOL_ID_PH), networkPoolName: g(rp(r) + 'poolName') };
         if (isEsa(s) && s.skipHcl) o.skipHclCompatibilityPrecheck = true;
         return o;
       })).flat();
-      files.push({
-        name: pre(g) + '-2-commission-hosts-api.json', title: 'Commission hosts (API)', json: commission,
+      if (commission(s)) files.push({
+        name: pre(g) + '-2-commission-hosts-api.json', title: 'Commission hosts (API)', json: commissionSpec,
         method: 'POST', endpoint: '/v1/hosts  (validate first: POST /v1/hosts/validations)',
         schema: { api: 'sddc-manager-api', type: 'HostCommissionSpec' },
       });
-      files.push({
+      if (commission(s)) files.push({
         name: pre(g) + '-2-commission-hosts-ui.json', title: 'Commission hosts (UI import)',
-        json: { hosts: commission.map(h => ({ fqdn: h.fqdn, username: h.username, storageType: h.storageType, password: h.password, networkPoolName: h.networkPoolName })) },
+        json: { hosts: commissionSpec.map(h => ({ fqdn: h.fqdn, username: h.username, storageType: h.storageType, password: h.password, networkPoolName: h.networkPoolName })) },
         note: 'SDDC Manager UI: Hosts &gt; Commission Hosts &gt; Import (JSON).',
       });
 
@@ -832,7 +837,11 @@
         s.vpcConn = sa && sa.vpcNetwork && sa.vpcNetwork.privateCidr ? 'distributed' : 'centralized';
         notes.push('The workload domain name is not part of the cluster spec; enter it for the lookups and generated names.');
       }
-      notes.push('Network pool and host commissioning values are not part of the ' + (CL ? 'cluster' : 'domain') + ' spec; fill in the network pool and hosts sections if you need those files.');
+      const allHosts = racksOf(s).map(r => s[rp(r) + 'hosts'] || []).flat();
+      s.commissioned = allHosts.length > 0 && allHosts.every(h => h.id);
+      notes.push(s.commissioned
+        ? 'All hosts have SDDC Manager host IDs, so they are treated as already commissioned: only the ' + (CL ? 'cluster' : 'domain') + ' spec is generated (untick "Hosts are already commissioned" to get the network pool and commissioning files).'
+        : 'Network pool and host commissioning values are not part of the ' + (CL ? 'cluster' : 'domain') + ' spec; fill in the network pool and hosts sections if you need those files.');
       const extra = {};
       for (const k of Object.keys(j)) if (!KNOWN.includes(k)) extra[k] = j[k];
       if (Object.keys(extra).length) notes.push('Fields kept unchanged in the output: ' + Object.keys(extra).join(', '));

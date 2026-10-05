@@ -8,7 +8,8 @@
   const pool = s => overlay(s) && s.tepMode === 'pool';
   const newPool = s => pool(s) && !s.tepReuse;
 
-  const createPool = s => s.poolMode !== 'reuse';
+  const commission = s => !s.commissioned;
+  const createPool = s => commission(s) && s.poolMode !== 'reuse';
 
   function poolNet(p, title, o) {
     const show = createPool;
@@ -130,9 +131,9 @@
       {
         id: 'target', title: 'Target cluster',
         fields: [
-          { id: 'clusterName', label: 'Cluster name', type: 'text', req: true, rerender: true, ph: 'sfo-m01-cl01', auto: () => C.from('mgmt', 'clusterName'), help: 'Name of the vSAN cluster to stretch (used for file names and documentation). Empty: the management cluster from the Management Domain tab.' },
+          { id: 'clusterName', label: 'Cluster name', type: 'text', req: commission, rerender: true, ph: 'sfo-m01-cl01', auto: () => C.from('mgmt', 'clusterName'), help: 'Name of the vSAN cluster to stretch. Not part of the stretch spec: used for file names and the default AZ2 pool and profile names (required when files 1 and 2 are generated). Empty: the management cluster from the Management Domain tab.' },
           { id: 'clusterId', label: 'SDDC Manager cluster ID', type: 'text', help: 'UUID of the cluster from <code>GET /v1/clusters</code>. Used in the API path <code>PATCH /v1/clusters/{id}</code>. Not part of the JSON body.', lookup: clusterLookup },
-          { id: 'vsanType', label: 'vSAN architecture', type: 'select', def: 'vsan-esa', options: C.storage.slice(0, 2), help: 'Architecture of the existing cluster. Determines the commissioning storage type. Filled by the cluster ID lookup.' },
+          { id: 'vsanType', label: 'vSAN architecture', type: 'select', def: 'vsan-esa', options: C.storage.slice(0, 2), show: commission, help: 'Architecture of the existing cluster. Determines the commissioning storage type. Filled by the cluster ID lookup.' },
           { id: 'nsxNet', label: 'NSX networking of the cluster', type: 'select', def: 'overlay', rerender: true, options: [
             { v: 'overlay', l: 'Hosts have TEPs (NSX overlay)', d: 'Default. All VCF 9.0 / 9.1.0 management domains and every Full Stack VPC deployment have host TEPs, even if only VLAN-backed segments are used. AZ2 hosts then need TEPs too (section 3).' },
             { v: 'vlan', l: 'Hosts have no TEPs', d: 'Only for clusters deployed without host TEPs: VCF 9.1.1 with VLAN backed VPC (overlayVtepSpec NO_IP). No AZ2 overlay configuration is sent.' },
@@ -154,11 +155,12 @@
       {
         id: 'pool', title: '1. AZ2 network pool',
         fields: [
-          { id: 'poolMode', label: 'VCF network pool', type: 'select', def: 'create', rerender: true, options: [
+          { id: 'commissioned', label: 'AZ2 hosts are already commissioned', type: 'checkbox', def: false, rerender: true, help: 'The AZ2 network pool exists and the hosts are commissioned in SDDC Manager (they have host IDs). Files 1 and 2 are not generated; only the stretch spec. Set automatically when an imported stretch spec has host IDs.' },
+          { id: 'poolMode', label: 'VCF network pool', type: 'select', def: 'create', rerender: true, show: commission, options: [
             { v: 'create', l: 'Create a new VCF network pool', d: 'Generates the AZ2 network pool JSON (file 1).' },
             { v: 'reuse', l: 'Re-use an existing VCF network pool', d: 'AZ2 hosts are commissioned into an existing pool; no network pool file is generated.' },
           ], help: 'Workbook "VCF Network Pool Type".' },
-          { id: 'poolName', label: 'Network pool name', type: 'text', rerender: true, auto: (s, g) => g('clusterName') ? g('clusterName') + '-az2-np01' : '', help: 'Name of the AZ2 network pool in SDDC Manager.', api: 'name' },
+          { id: 'poolName', label: 'Network pool name', type: 'text', rerender: true, show: commission, auto: (s, g) => g('clusterName') ? g('clusterName') + '-az2-np01' : '', help: 'Name of the AZ2 network pool in SDDC Manager.', api: 'name' },
           ...poolNet('vmotion', 'vMotion (AZ2)', { vlan: '1212', gw: '10.12.12.1/24', start: '10.12.12.101', end: '10.12.12.116' }),
           ...poolNet('vsan', 'vSAN (AZ2)', { vlan: '1213', gw: '10.12.13.1/24', start: '10.12.13.101', end: '10.12.13.116' }),
         ],
@@ -167,8 +169,8 @@
         id: 'hosts', title: '2. AZ2 hosts',
         intro: 'Add the same number of hosts in AZ2 as in AZ1. Commission them into the AZ2 network pool, then copy their IDs here.',
         fields: [
-          { id: 'esxPw', label: 'ESX root password', type: 'password', req: true, pw: C.pw.esx, help: 'Root password of the AZ2 hosts.', api: 'password' },
-          { id: 'poolId', label: 'Network pool ID', type: 'text', help: 'ID of the AZ2 network pool (GET /v1/network-pools). Leave empty to keep a placeholder.', api: 'networkPoolId', lookup: poolLookup },
+          { id: 'esxPw', label: 'ESX root password', type: 'password', req: commission, show: commission, pw: C.pw.esx, help: 'Root password of the AZ2 hosts.', api: 'password' },
+          { id: 'poolId', label: 'Network pool ID', type: 'text', show: commission, help: 'ID of the AZ2 network pool (GET /v1/network-pools). Leave empty to keep a placeholder.', api: 'networkPoolId', lookup: poolLookup },
           {
             id: 'hosts', label: 'AZ2 hosts', type: 'rows', min: 1, max: 32, initial: 4, addLabel: 'Add host', lookup: hostLookup,
             columns: [
@@ -250,14 +252,14 @@
     });
     const hostRows = s.hosts.filter(h => (h.fqdn || '').trim());
     const storageType = C.storageTypeCommission[s.vsanType];
-    const commission = hostRows.map(h => ({ fqdn: h.fqdn.trim(), username: 'root', password: s.esxPw, storageType, networkPoolId: (s.poolId || '').trim() || POOL_ID_PH, networkPoolName: g('poolName') }));
-    files.push({
-      name: base + '-2-commission-az2-hosts-api.json', title: 'Commission AZ2 hosts (API)', json: commission,
+    const commissionSpec = hostRows.map(h => ({ fqdn: h.fqdn.trim(), username: 'root', password: s.esxPw, storageType, networkPoolId: (s.poolId || '').trim() || POOL_ID_PH, networkPoolName: g('poolName') }));
+    if (commission(s)) files.push({
+      name: base + '-2-commission-az2-hosts-api.json', title: 'Commission AZ2 hosts (API)', json: commissionSpec,
       method: 'POST', endpoint: '/v1/hosts  (validate first: POST /v1/hosts/validations)', schema: { api: 'sddc-manager-api', type: 'HostCommissionSpec' },
     });
-    files.push({
+    if (commission(s)) files.push({
       name: base + '-2-commission-az2-hosts-ui.json', title: 'Commission AZ2 hosts (UI import)',
-      json: { hosts: commission.map(h => ({ fqdn: h.fqdn, username: h.username, storageType: h.storageType, password: h.password, networkPoolName: h.networkPoolName })) },
+      json: { hosts: commissionSpec.map(h => ({ fqdn: h.fqdn, username: h.username, storageType: h.storageType, password: h.password, networkPoolName: h.networkPoolName })) },
       note: 'SDDC Manager UI: Hosts &gt; Commission Hosts &gt; Import (JSON).',
     });
 
@@ -311,7 +313,7 @@
   form.fromJson = function (j) {
     const sp = j.clusterStretchSpec || j;
     const s = {};
-    const notes = ['Network pool and commissioning values are not part of the stretch spec; fill in sections 1 and 2 if you need those files.'];
+    const notes = ['Cluster name and cluster ID are not part of the stretch spec; enter them for the file names, lookups and the PATCH path.'];
     const str = v => (v === undefined || v === null ? '' : String(v));
     const w = sp.witnessSpec || {};
     s.witnessFqdn = str(w.fqdn); s.witnessIp = str(w.vsanIp); s.witnessCidr = str(w.vsanCidr);
@@ -321,6 +323,10 @@
     s.noLicense = sp.deployWithoutLicenseKeys !== false;
     const hs = sp.hostSpecs || [];
     s.hosts = hs.map(h => ({ fqdn: str(h.hostName || h.hostname), id: str(h.id).indexOf('<--') === 0 ? '' : str(h.id) }));
+    s.commissioned = s.hosts.length > 0 && s.hosts.every(h => h.id);
+    notes.push(s.commissioned
+      ? 'All AZ2 hosts have SDDC Manager host IDs, so they are treated as already commissioned: only the stretch spec is generated (untick "AZ2 hosts are already commissioned" to get the network pool and commissioning files).'
+      : 'Network pool and commissioning values are not part of the stretch spec; fill in sections 1 and 2 if you need those files.');
     const hn = (hs[0] || {}).hostNetworkSpec || {};
     s.nics = (hn.vmNics || []).map(x => ({ id: str(x.id), vds: str(x.vdsName), uplink: str(x.uplink) }));
     const ns = sp.networkSpec;

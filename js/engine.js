@@ -257,6 +257,9 @@
     return window.VCF_SCHEMA && VCF_SCHEMA[api] && VCF_SCHEMA[api][type];
   }
 
+  // Fields missing from the 9.1.1 API reference but present in specs that SDDC Manager accepted
+  const SEEN_IN_WORKING_SPECS = { HostSpec: ['hostname'], StretchClusterNetworkProfile: ['isDefault'], TeamingSpec: ['name'] };
+
   function validateSchema(obj, api, type, path, out) {
     const def = schemaDef(api, type);
     if (!def) return;
@@ -272,7 +275,8 @@
     for (const [k, val] of Object.entries(obj)) {
       const f = def[k];
       if (!f) {
-        out.push({ level: 'warn', msg: path + '.' + k + ' is not a known field of ' + type + ' (9.1.1 API)' });
+        if ((SEEN_IN_WORKING_SPECS[type] || []).includes(k)) out.push({ level: 'info', msg: path + '.' + k + ' is not in the 9.1.1 API reference of ' + type + ', but is accepted by SDDC Manager (seen in working specs)' });
+        else out.push({ level: 'warn', msg: path + '.' + k + ' is not a known field of ' + type + ' (9.1.1 API)' });
         continue;
       }
       if (val === null) continue;

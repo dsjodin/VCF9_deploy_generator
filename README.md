@@ -67,6 +67,8 @@ Three layers, shown in the Issues tab and next to each field:
 
 - **Validate only** checks the file against the API schema without loading it.
 - **Load into form** maps the JSON into the form. Top-level fields the form does not handle are kept unchanged in the output. Short host names are expanded with the DNS domain.
+- When every host in an imported workload domain, cluster or stretch spec has an SDDC Manager host ID, the hosts are treated as already commissioned (**Hosts are already commissioned**): only the spec itself is generated, without network pool and commissioning files.
+- `hostname` (host specs), `isDefault` (stretch network profiles) and `name` (uplink profile teamings) are not in the 9.1.1 API reference but appear in specs that SDDC Manager accepted; they are reported as info, not warnings. Generated specs use the documented `hostName` and leave the other two out.
 
 **Download without passwords** removes every password field, for sharing or version control.
 
