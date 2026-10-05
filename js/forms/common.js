@@ -149,8 +149,8 @@
   ];
 
   C.vpcType = [
-    { v: 'full', l: 'Full Stack VPC', d: 'Complete VPC feature set with NSX overlay. Host TEPs are configured on the cluster.' },
-    { v: 'vlan', l: 'VLAN backed VPC', d: 'Essential VPC services without overlay TEPs or TEP management (no host TEP IPs are created).' },
+    { v: 'full', l: 'Full Stack VPC', d: 'Complete VPC feature set with NSX overlay. Host TEPs are required: host overlay VLAN and TEP IP pool (or DHCP) must be configured.' },
+    { v: 'vlan', l: 'VLAN backed VPC', d: 'VCF 9.1.1: essential VPC services on VLANs without NSX overlay. Hosts get no TEPs, so no host overlay VLAN or TEP IP pool is needed (API: overlayVtepSpec NO_IP; the workbook masks the TEP inputs). Choose Full Stack VPC if you need overlay networking.' },
   ];
 
   C.vpcConnectivity = [
