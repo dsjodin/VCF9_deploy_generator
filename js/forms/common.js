@@ -149,9 +149,10 @@
   ];
 
   C.vpcType = [
-    { v: 'full', l: 'Full Stack VPC', d: 'Complete VPC feature set with NSX overlay. Host TEPs are required: host overlay VLAN and TEP IP pool (or DHCP) must be configured. Also needed for vDefend (Day-2): DFW and other vDefend features use host TEPs.' },
-    { v: 'vlan', l: 'VLAN backed VPC', d: 'VCF 9.1.1: essential VPC services on VLANs without NSX overlay. Hosts get no TEPs, so no host overlay VLAN or TEP IP pool is needed (API: overlayVtepSpec NO_IP; the workbook masks the TEP inputs). Choose Full Stack VPC if you need overlay networking or plan to use vDefend (Day-2, not part of this workflow): DFW and other vDefend features need host TEPs.' },
+    { v: 'full', l: 'Host TEPs - Full Stack VPC', d: 'Hosts get NSX TEPs: host overlay VLAN and TEP IP pool (or DHCP) are configured. Needed for Full Stack VPC, overlay segments and vDefend (Day-2): DFW and other vDefend features use host TEPs.' },
+    { v: 'vlan', l: 'No host TEPs - VLAN backed VPC (9.1.1)', d: 'Hosts get no TEPs, so no host overlay VLAN or TEP IP pool (API: overlayVtepSpec NO_IP; the workbook masks the TEP inputs). Only VLAN backed VPC and VLAN segments: no overlay networking, and no vDefend DFW or other vDefend features that need host TEPs.' },
   ];
+  C.vpcTypeHelp = 'Whether the hosts get NSX TEPs. In the API this is one switch (<code>overlayVtepSpec.vtepType = NO_IP</code> means no TEPs) and it also sets the VPC model: with TEPs Full Stack VPC, without TEPs VLAN backed VPC. Decide on everything the hosts will need, not only on VPC use: Full Stack VPC, overlay segments and vDefend (DFW and other features, deployed Day-2) need host TEPs. Workbook "VPC Network Configuration".';
 
   C.vpcConnectivity = [
     { v: 'centralized', l: 'Centralized connectivity', d: 'Recommended. No external connection is created by the installer; centralized transit gateway with Edge nodes / VNAs is configured after bring-up in a separate workflow.' },

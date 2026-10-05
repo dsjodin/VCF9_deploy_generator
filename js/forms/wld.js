@@ -284,9 +284,9 @@
     const vlanTzOn = { id: 'vlanTzOn', label: 'Transport zone type: NSX-VLAN', type: 'checkbox', def: !CL, rerender: true, show: full, help: 'Workbook "Transport Zone Type: NSX-VLAN". Attach a VLAN transport zone to the NSX switch (needed for VLAN-backed segments, Edge uplinks).' };
     const vlanTz = Object.assign({ id: 'vlanTz', label: 'VLAN transport zone name', type: 'text', def: 'nsx-vlan-transportzone-0', show: s => full(s) && s.vlanTzOn, help: 'NSX VLAN transport zone.', api: API + '.nsxtSwitchConfig.transportZones[].name' },
       CL ? { def: undefined, auto: () => C.from('wld', 'vlanTz') || 'nsx-vlan-transportzone-0', help: 'NSX VLAN transport zone. Empty: taken from the Workload Domain tab.', lookup: tzLookup } : {});
-    const vpcType = { id: 'vpcType', label: 'VPC network configuration', type: 'select', options: C.vpcType, def: 'full', rerender: true,
-      help: CL ? 'VPC network configuration of the workload domain NSX instance. It decides whether the hosts get TEPs: Full Stack VPC = TEPs (host overlay section), VLAN backed VPC (9.1.1) = no TEPs.' : 'NSX VPC model.',
-      api: CL ? NSXP + '.overlayVtepSpec' : 'nsxTSpec.vpcSpec.vpcNetworkConfigurationType' };
+    const vpcType = { id: 'vpcType', label: 'Host TEPs (VPC network configuration)', type: 'select', options: C.vpcType, def: 'full', rerender: true,
+      help: C.vpcTypeHelp + (CL ? ' For a new cluster, match the existing clusters of the workload domain.' : ' Infrastructure-only (shell) domains write it as <code>vpcSpec.vpcNetworkConfigurationType</code>.'),
+      api: CL ? NSXP + '.overlayVtepSpec' : [NSXP + '.overlayVtepSpec', 'nsxTSpec.vpcSpec.vpcNetworkConfigurationType'] };
     const vpcConn = { id: 'vpcConn', label: 'Network connectivity', type: 'select', options: C.vpcConnectivity, def: 'centralized', rerender: true, show: CL ? s => fullStack(s) && sup(s) : fullStack, help: CL ? 'VPC connectivity of the domain. Only used for the Supervisor private CIDR.' : 'External connectivity for VPCs.', api: CL ? undefined : 'nsxTSpec.vpcSpec.dtgwSpec' };
 
     const t1 = tepFields(1, () => true);
