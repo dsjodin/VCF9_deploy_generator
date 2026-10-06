@@ -4,23 +4,28 @@
   const N = Net;
 
   const isHA = s => s.deployModel === 'ha';
+  // Per component model: follows the deployment model unless "Customize per component" is selected.
+  const modelOf = (s, k) => s.customModel && s[k + 'Model'] ? s[k + 'Model'] : s.deployModel;
+  const nsxHA = s => modelOf(s, 'nsx') === 'ha';
+  const opsHA = s => modelOf(s, 'ops') === 'ha';
+  const autoHA = s => modelOf(s, 'auto') === 'ha';
   const extend = s => s.deployType === 'extend';
   const newFleet = s => !extend(s);
   const autoOn = s => newFleet(s) && !!s.includeAuto;
+  const COMP_MODEL = [{ v: 'ha', l: 'High Availability' }, { v: 'simple', l: 'Simple (single node)' }];
   const STATE = [{ v: 'Active', l: 'Active' }, { v: 'Standby', l: 'Standby' }, { v: 'Unused', l: 'Unused' }];
 
   // Workbook rules: sizes follow the deployment model and Size unless "Customize appliance sizing" is selected.
   function sizes(s) {
     if (s.customSizes) return { ops: s.opsSize, collector: s.collectorSize, vc: s.vcSize, vcStorage: s.vcStorage, nsx: s.nsxSize, auto: s.autoSize };
     const z = s.fleetSize;
-    const simple = s.deployModel === 'simple';
     return {
-      ops: simple ? 'small' : z,
-      collector: simple || z === 'small' ? 'small' : 'standard',
+      ops: opsHA(s) ? z : 'small',
+      collector: !opsHA(s) || z === 'small' ? 'small' : 'standard',
       vc: z,
       vcStorage: z === 'medium' ? 'lstorage' : z === 'large' ? 'xlstorage' : '',
-      nsx: !simple && z === 'large' ? 'large' : 'medium',
-      auto: simple ? 'small' : z,
+      nsx: nsxHA(s) && z === 'large' ? 'large' : 'medium',
+      auto: autoHA(s) ? z : 'small',
     };
   }
   const isVsan = s => s.storage === 'vsan-esa' || s.storage === 'vsan-osa';
@@ -152,7 +157,12 @@
         id: 'sizing', title: 'Deployment model and sizing',
         intro: 'The deployment model applies to newly deployed VCF Operations, VCF Automation and NSX Manager appliances.',
         fields: [
-          { id: 'deployModel', label: 'Deployment model', type: 'select', options: C.deployModel, def: 'ha', rerender: true, help: 'Controls the number of NSX Manager, VCF Operations and VCF Automation nodes.' },
+          { id: 'deployModel', label: 'Deployment model', type: 'select', options: C.deployModel, def: 'ha', rerender: true, help: 'Controls the number of NSX Manager, VCF Operations and VCF Automation nodes, and the automatic VCF management services size.' },
+          { id: 'customModel', label: 'Customize deployment model per component', type: 'checkbox', def: false, rerender: true, help: 'Choose High Availability or Simple separately for NSX Manager, VCF Operations and VCF Automation, for example three NSX Managers with a single VCF Operations node. Only possible through the JSON/API, not in the VCF Installer UI. When cleared, all components follow the deployment model.' },
+          { id: 'nsxModel', label: 'NSX Manager', type: 'select', options: COMP_MODEL, def: 'ha', rerender: true, show: s => s.customModel, help: 'High Availability: three NSX Manager appliances behind the cluster VIP. Simple: one appliance.', api: 'nsxtSpec.nsxtManagers[]' },
+          { id: 'opsModel', label: 'VCF Operations', type: 'select', options: COMP_MODEL, def: 'ha', rerender: true, show: s => s.customModel && newFleet(s), help: 'High Availability: master, replica and data node behind a load balancer FQDN. Simple: one master node.', api: ['vcfOperationsSpec.nodes[]', 'vcfOperationsSpec.loadBalancerFqdn'] },
+          { id: 'autoModel', label: 'VCF Automation', type: 'select', options: COMP_MODEL, def: 'ha', rerender: true, show: s => s.customModel && autoOn(s), help: 'High Availability needs 5 addresses in the VCF Automation IP range, Simple needs 2. The installer picks the mode from the number of addresses and the size.', api: 'vcfAutomationSpec.ipPool[]' },
+          { type: 'note', kind: 'info', show: s => s.customModel, text: s => 'Nodes: NSX Manager <b>' + (nsxHA(s) ? 3 : 1) + '</b>' + (newFleet(s) ? ', VCF Operations <b>' + (opsHA(s) ? 3 : 1) + '</b>' : '') + (autoOn(s) ? ', VCF Automation <b>' + (autoHA(s) ? 'High Availability' : 'Simple') + '</b>' : '') + '. VCF management services size (Automatic) still follows the deployment model.' },
           { id: 'fleetSize', label: 'Size', type: 'select', def: 'medium', rerender: true, options: [
             { v: 'small', l: 'Small', d: 'Smallest appliance sizes. With High Availability, VCF Automation small is deployed in Simple mode.' },
             { v: 'medium', l: 'Medium', d: 'Workbook default. Medium VCF Operations / Automation, standard collector, medium vCenter with large storage, medium NSX.' },
@@ -251,7 +261,7 @@
           { type: 'note', text: (s) => '<b>VCF management services IP range</b> - on the ' + componentNetLabel(s) + '. Minimum 12 addresses, 30 recommended for scale-out.' },
           { id: 'vspStart', label: 'Range start', type: 'text', fmt: 'ipv4', req: true, ph: '10.11.99.31', help: 'First IP of the pool used by the VCF services runtime nodes (VCF management services).', api: 'vspClusterSpec.ipv4Pool.ipRange.startIpAddress' },
           { id: 'vspEnd', label: 'Range end', type: 'text', fmt: 'ipv4', req: true, ph: '10.11.99.45', help: 'Last IP of the VCF management services pool.', api: 'vspClusterSpec.ipv4Pool.ipRange.endIpAddress' },
-          { type: 'note', text: s => '<b>VCF Automation IP range</b> - on the ' + componentNetLabel(s) + '. ' + (isHA(s) ? 'High Availability: 5 addresses (4 active nodes + 1 used during rolling upgrades).' : 'Simple: 2 addresses (1 node + 1 used during upgrades).'), show: autoOn },
+          { type: 'note', text: s => '<b>VCF Automation IP range</b> - on the ' + componentNetLabel(s) + '. ' + (autoHA(s) ? 'High Availability: 5 addresses (4 active nodes + 1 used during rolling upgrades).' : 'Simple: 2 addresses (1 node + 1 used during upgrades).'), show: autoOn },
           { id: 'autoStart', label: 'Range start', type: 'text', fmt: 'ipv4', req: true, show: autoOn, ph: '10.11.99.46', help: 'First IP for VCF Automation runtime nodes.', api: 'vcfAutomationSpec.ipPool[]' },
           { id: 'autoEnd', label: 'Range end', type: 'text', fmt: 'ipv4', req: true, show: autoOn, ph: '10.11.99.50', help: 'Last IP for VCF Automation runtime nodes.', api: 'vcfAutomationSpec.ipPool[]' },
           ...netFields('vmotion', 'vMotion network', { vlan: '1112', mtu: '9000', gw: '10.11.12.1/24', range: true, start: '10.11.12.101', end: '10.11.12.116', api: 'networkSpecs[VMOTION]' }),
@@ -295,8 +305,8 @@
         fields: [
           fqdnField('nsxVip', 'Cluster (VIP) FQDN', 'sfo-m01-nsx01.sfo.rainpole.io', 'FQDN of the NSX Manager cluster virtual IP.', 'nsxtSpec.vipFqdn'),
           fqdnField('nsxA', 'Appliance 1 FQDN', 'sfo-m01-nsx01a.sfo.rainpole.io', 'First NSX Manager node.', 'nsxtSpec.nsxtManagers[].hostname'),
-          fqdnField('nsxB', 'Appliance 2 FQDN', 'sfo-m01-nsx01b.sfo.rainpole.io', 'Second NSX Manager node (High Availability).', 'nsxtSpec.nsxtManagers[].hostname', { show: isHA }),
-          fqdnField('nsxC', 'Appliance 3 FQDN', 'sfo-m01-nsx01c.sfo.rainpole.io', 'Third NSX Manager node (High Availability).', 'nsxtSpec.nsxtManagers[].hostname', { show: isHA }),
+          fqdnField('nsxB', 'Appliance 2 FQDN', 'sfo-m01-nsx01b.sfo.rainpole.io', 'Second NSX Manager node (High Availability).', 'nsxtSpec.nsxtManagers[].hostname', { show: nsxHA }),
+          fqdnField('nsxC', 'Appliance 3 FQDN', 'sfo-m01-nsx01c.sfo.rainpole.io', 'Third NSX Manager node (High Availability).', 'nsxtSpec.nsxtManagers[].hostname', { show: nsxHA }),
           pwField('nsxAdminPw', 'Admin password', C.pw.nsx, 'NSX admin user password. At least 12 characters, no character repeated 3 times in a row.', 'nsxtSpec.nsxtAdminPassword'),
           pwField('nsxRootPw', 'Root password', C.pw.nsx, 'NSX Manager root password.', 'nsxtSpec.rootNsxtManagerPassword'),
           pwField('nsxAuditPw', 'Audit password', C.pw.nsx, 'NSX audit user password.', 'nsxtSpec.nsxtAuditPassword'),
@@ -327,14 +337,14 @@
         id: 'ops', title: 'VCF Operations',
         fields: [
           fqdnField('opsA', 'Primary node FQDN', 'flt-ops01a.rainpole.io', 'VCF Operations primary (master) node.', 'vcfOperationsSpec.nodes[].hostname'),
-          fqdnField('opsB', 'Replica node FQDN', 'flt-ops01b.rainpole.io', 'VCF Operations replica node (High Availability).', 'vcfOperationsSpec.nodes[].hostname', { show: s => isHA(s) && newFleet(s) }),
-          fqdnField('opsC', 'Data node FQDN', 'flt-ops01c.rainpole.io', 'VCF Operations data node (High Availability).', 'vcfOperationsSpec.nodes[].hostname', { show: s => isHA(s) && newFleet(s) }),
-          fqdnField('opsLb', 'Load balancer FQDN', 'flt-ops01.rainpole.io', 'Virtual FQDN in front of the VCF Operations cluster (High Availability).', 'vcfOperationsSpec.loadBalancerFqdn', { show: s => isHA(s) && newFleet(s) }),
+          fqdnField('opsB', 'Replica node FQDN', 'flt-ops01b.rainpole.io', 'VCF Operations replica node (High Availability).', 'vcfOperationsSpec.nodes[].hostname', { show: s => opsHA(s) && newFleet(s) }),
+          fqdnField('opsC', 'Data node FQDN', 'flt-ops01c.rainpole.io', 'VCF Operations data node (High Availability).', 'vcfOperationsSpec.nodes[].hostname', { show: s => opsHA(s) && newFleet(s) }),
+          fqdnField('opsLb', 'Load balancer FQDN', 'flt-ops01.rainpole.io', 'Virtual FQDN in front of the VCF Operations cluster (High Availability).', 'vcfOperationsSpec.loadBalancerFqdn', { show: s => opsHA(s) && newFleet(s) }),
           { id: 'opsThumb', label: 'Existing VCF Operations SSL thumbprint', type: 'text', fmt: 'thumb', req: true, show: extend, help: 'SHA-256 thumbprint of the existing VCF Operations primary node certificate, e.g. <code>openssl s_client -connect ops:443 &lt;/dev/null | openssl x509 -noout -fingerprint -sha256</code>.', api: 'vcfOperationsSpec.nodes[].sslThumbprint' },
           pwField('opsAdminPw', 'Administrator password', C.pw.fifteen, 'VCF Operations admin password. Minimum 15 characters. For a new instance in an existing fleet: the admin password of the existing VCF Operations.', 'vcfOperationsSpec.adminUserPassword', { req: s => pw(s) || extend(s), show: s => pw(s) || extend(s) }),
           pwField('opsRootPw', 'Primary node root password', C.pw.fifteen, 'Root password of the VCF Operations primary node.', 'vcfOperationsSpec.nodes[].rootUserPassword', { req: s => pw(s) && newFleet(s), show: s => pw(s) && newFleet(s) }),
-          pwField('opsRootPwB', 'Replica node root password', C.pw.fifteen, 'Root password of the replica node.', 'vcfOperationsSpec.nodes[].rootUserPassword', { req: false, show: s => pw(s) && newFleet(s) && isHA(s), hint: 'Leave empty to use the primary node root password.' }),
-          pwField('opsRootPwC', 'Data node root password', C.pw.fifteen, 'Root password of the data node.', 'vcfOperationsSpec.nodes[].rootUserPassword', { req: false, show: s => pw(s) && newFleet(s) && isHA(s), hint: 'Leave empty to use the primary node root password.' }),
+          pwField('opsRootPwB', 'Replica node root password', C.pw.fifteen, 'Root password of the replica node.', 'vcfOperationsSpec.nodes[].rootUserPassword', { req: false, show: s => pw(s) && newFleet(s) && opsHA(s), hint: 'Leave empty to use the primary node root password.' }),
+          pwField('opsRootPwC', 'Data node root password', C.pw.fifteen, 'Root password of the data node.', 'vcfOperationsSpec.nodes[].rootUserPassword', { req: false, show: s => pw(s) && newFleet(s) && opsHA(s), hint: 'Leave empty to use the primary node root password.' }),
           fqdnField('collectorFqdn', 'Collector (cloud proxy) FQDN', 'sfo-cp01.sfo.rainpole.io', 'VCF Operations collector for this instance.', 'vcfOperationsCollectorSpec.hostname'),
           pwField('collectorPw', 'Collector root password', C.pw.fifteen, 'Root password of the collector appliance.', 'vcfOperationsCollectorSpec.rootUserPassword'),
           fqdnField('licenseFqdn', 'License server FQDN', 'flt-lc01.rainpole.io', 'FQDN of the VCF license server component.', 'licenseServerSpec.hostname', { show: newFleet }),
@@ -464,12 +474,12 @@
     const vspN = C.rangeRules(out, { label: 'VCF management services range', gw: cgw, start: s.vspStart, end: s.vspEnd, fieldStart: 'vspStart', fieldEnd: 'vspEnd', need: 12, needMsg: 'minimum is 12' });
     if (vspN && vspN < 30) out.push({ level: 'info', field: 'vspEnd', msg: 'VCF management services range has ' + vspN + ' addresses; 30 are recommended to allow more components and auto-scaling' });
     if (autoOn(s)) {
-      const need = isHA(s) ? 5 : 2;
-      C.rangeRules(out, { label: 'VCF Automation range', gw: cgw, start: s.autoStart, end: s.autoEnd, fieldStart: 'autoStart', fieldEnd: 'autoEnd', need, needMsg: 'needs ' + need + ' for the ' + (isHA(s) ? 'High Availability' : 'Simple') + ' model' });
+      const need = autoHA(s) ? 5 : 2;
+      C.rangeRules(out, { label: 'VCF Automation range', gw: cgw, start: s.autoStart, end: s.autoEnd, fieldStart: 'autoStart', fieldEnd: 'autoEnd', need, needMsg: 'needs ' + need + ' for the ' + (autoHA(s) ? 'High Availability' : 'Simple') + ' model' });
       if ([s.vspStart, s.vspEnd, s.autoStart, s.autoEnd].every(N.isIPv4) && N.rangesOverlap(s.vspStart, s.vspEnd, s.autoStart, s.autoEnd)) {
         out.push({ level: 'error', field: 'autoStart', msg: 'VCF Automation range overlaps the VCF management services range' });
       }
-      if (isHA(s) && sizes(s).auto === 'small') out.push({ level: 'warn', field: s.customSizes ? 'autoSize' : 'fleetSize', msg: 'VCF Automation does not support High Availability with size small; it will be deployed in Simple mode' });
+      if (autoHA(s) && sizes(s).auto === 'small') out.push({ level: 'warn', field: s.customSizes ? 'autoSize' : 'fleetSize', msg: 'VCF Automation does not support High Availability with size small; it will be deployed in Simple mode' });
     }
 
     // Ranges inside other subnets must not collide with gateway of mgmt
@@ -516,7 +526,7 @@
     const z = sizes(s);
     if (z.ops === 'xsmall') out.push({ level: 'warn', field: 'opsSize', msg: 'VCF Operations xsmall is reported as not accepted for the management domain in 9.1' });
     if (z.vc === 'tiny') out.push({ level: 'warn', field: 'vcSize', msg: 'vCenter tiny is reported as not accepted for the management domain in 9.1' });
-    if (isHA(s) && z.ops === 'xsmall') out.push({ level: 'error', field: 'opsSize', msg: 'xsmall is only available for the Simple deployment model' });
+    if (opsHA(s) && newFleet(s) && z.ops === 'xsmall') out.push({ level: 'error', field: 'opsSize', msg: 'xsmall is only available for the Simple deployment model' });
     if (s.pgAdvanced) {
       for (const t of TRAFFIC) {
         if (!t.show(s) || s['vds' + vdsOf(s, t.k) + 'Type'] === 'lag') continue;
@@ -614,7 +624,7 @@
     // NSX
     const nsx = {
       nsxtManagerSize: z.nsx,
-      nsxtManagers: [{ hostname: g('nsxA') }].concat(ha ? [{ hostname: g('nsxB') }, { hostname: g('nsxC') }] : []),
+      nsxtManagers: [{ hostname: g('nsxA') }].concat(nsxHA(s) ? [{ hostname: g('nsxB') }, { hostname: g('nsxC') }] : []),
       vipFqdn: g('nsxVip'),
       useExistingDeployment: false,
       skipNsxOverlayOverManagementNetwork: true,
@@ -650,9 +660,9 @@
     if (extend(s)) {
       j.vcfOperationsSpec = { nodes: [{ hostname: g('opsA'), type: 'master', sslThumbprint: g('opsThumb') }], adminUserPassword: s.opsAdminPw, useExistingDeployment: true };
     } else {
-      j.vcfOperationsSpec = { nodes: [node('opsA', 'master', 'opsRootPw')].concat(ha ? [node('opsB', 'replica', 'opsRootPwB'), node('opsC', 'data', 'opsRootPwC')] : []), applianceSize: z.ops, useExistingDeployment: false };
+      j.vcfOperationsSpec = { nodes: [node('opsA', 'master', 'opsRootPw')].concat(opsHA(s) ? [node('opsB', 'replica', 'opsRootPwB'), node('opsC', 'data', 'opsRootPwC')] : []), applianceSize: z.ops, useExistingDeployment: false };
       if (withPw) j.vcfOperationsSpec.adminUserPassword = s.opsAdminPw;
-      if (ha) j.vcfOperationsSpec.loadBalancerFqdn = g('opsLb');
+      if (opsHA(s)) j.vcfOperationsSpec.loadBalancerFqdn = g('opsLb');
     }
 
     j.vcfOperationsCollectorSpec = { hostname: g('collectorFqdn'), applianceSize: z.collector, useExistingDeployment: false };
@@ -815,7 +825,17 @@
 
     const nsx = j.nsxtSpec || {};
     const mgrs = nsx.nsxtManagers || [];
-    s.deployModel = mgrs.length >= 3 || ((j.vcfOperationsSpec || {}).nodes || []).length >= 3 ? 'ha' : 'simple';
+    const opsNodes = (j.vcfOperationsSpec || {}).nodes || [];
+    const auPool = (j.vcfAutomationSpec || {}).ipPool;
+    const models = { nsx: mgrs.length >= 3 ? 'ha' : 'simple' };
+    if (j.workflowType !== 'VCF_EXTEND') {
+      models.ops = opsNodes.length >= 3 ? 'ha' : 'simple';
+      if (auPool) models.auto = auPool.length >= 5 ? 'ha' : 'simple';
+    }
+    const mixed = new Set(Object.values(models)).size > 1;
+    s.deployModel = mixed ? (models.ops || models.nsx) : models.nsx;
+    s.customModel = mixed;
+    for (const k of Object.keys(models)) s[k + 'Model'] = models[k];
     s.nsxVip = str(nsx.vipFqdn);
     s.nsxA = str((mgrs[0] || {}).hostname); s.nsxB = str((mgrs[1] || {}).hostname); s.nsxC = str((mgrs[2] || {}).hostname);
     if (nsx.nsxtManagerSize) s.nsxSize = String(nsx.nsxtManagerSize).toLowerCase();
@@ -991,7 +1011,7 @@
     // Map imported sizes back to the workbook Size, or mark them customized.
     const got = { ops: extend(s) ? null : s.opsSize, collector: s.collectorSize, vc: s.vcSize, vcStorage: s.vcStorage, nsx: s.nsxSize, auto: s.includeAuto && !extend(s) ? s.autoSize : null };
     const fit = ['small', 'medium', 'large'].find(z => {
-      const d = sizes({ deployModel: s.deployModel, fleetSize: z });
+      const d = sizes(Object.assign({}, s, { customSizes: false, fleetSize: z }));
       return Object.keys(got).every(k => got[k] === undefined || got[k] === null || got[k] === d[k]);
     });
     if (fit) { s.fleetSize = fit; s.customSizes = false; } else s.customSizes = true;
